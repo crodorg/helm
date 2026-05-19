@@ -29,7 +29,6 @@ pub fn bindings_for(mode: Mode, focus: Option<InputFocus>) -> &'static [Binding]
         (Mode::Processes, _) => &PROCESSES,
         (Mode::Health, _) => &HEALTH,
         (Mode::Vultr, _) => &VULTR,
-        (Mode::Buyvm, _) => &BUYVM,
         (Mode::Money, _) => &MONEY,
         (Mode::LogPicker, _) => &LOG_PICKER,
         (Mode::LogTail, _) => &LOG_TAIL,
@@ -49,7 +48,6 @@ pub fn mode_title(mode: Mode) -> &'static str {
         Mode::Processes => "processes",
         Mode::Health => "health",
         Mode::Vultr => "vultr",
-        Mode::Buyvm => "buyvm",
         Mode::Money => "money",
         Mode::LogPicker => "logs",
         Mode::LogTail => "logs",
@@ -59,7 +57,7 @@ pub fn mode_title(mode: Mode) -> &'static str {
     }
 }
 
-const BROWSE: [Binding; 18] = [
+const BROWSE: [Binding; 17] = [
     b("j/k", "move"),
     b("enter", "ssh"),
     b("r", "run cmd"),
@@ -69,7 +67,6 @@ const BROWSE: [Binding; 18] = [
     b("p", "processes"),
     b("H", "health"),
     b("v", "vultr"),
-    b("b", "buyvm"),
     b("m", "money"),
     b("l", "logs"),
     b("t", "history"),
@@ -150,14 +147,6 @@ const VULTR: [Binding; 8] = [
     b("h/esc", "back"),
 ];
 
-const BUYVM: [Binding; 5] = [
-    b("j/k", "scroll"),
-    b("pgup/pgdn", "page"),
-    b("r", "refresh"),
-    b("?", "help"),
-    b("h/esc", "back"),
-];
-
 const MONEY: [Binding; 4] = [
     b("r", "refresh"),
     b("f", "cycle filter (per business)"),
@@ -215,7 +204,6 @@ mod tests {
             Mode::Processes,
             Mode::Health,
             Mode::Vultr,
-            Mode::Buyvm,
             Mode::Money,
             Mode::LogPicker,
             Mode::LogTail,
@@ -239,7 +227,6 @@ mod tests {
             Mode::Processes,
             Mode::Health,
             Mode::Vultr,
-            Mode::Buyvm,
             Mode::Money,
             Mode::LogTail,
             Mode::History,

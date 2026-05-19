@@ -1,6 +1,5 @@
 mod agent;
 mod browse;
-mod buyvm;
 mod dns;
 mod health;
 mod help;
@@ -51,7 +50,6 @@ pub fn draw(f: &mut Frame, app: &App) {
         Mode::Processes => processes::draw(f, chunks[1], app),
         Mode::Health => health::draw(f, chunks[1], app),
         Mode::Vultr => vultr::draw(f, chunks[1], app),
-        Mode::Buyvm => buyvm::draw(f, chunks[1], app),
         Mode::Money => money::draw(f, chunks[1], app),
         Mode::LogPicker => {
             // Render Browse beneath, then overlay the log picker modal.
@@ -73,7 +71,6 @@ pub fn draw(f: &mut Frame, app: &App) {
                 Some(Mode::Processes) => processes::draw(f, chunks[1], app),
                 Some(Mode::Health) => health::draw(f, chunks[1], app),
                 Some(Mode::Vultr) => vultr::draw(f, chunks[1], app),
-                Some(Mode::Buyvm) => buyvm::draw(f, chunks[1], app),
                 Some(Mode::Money) => money::draw(f, chunks[1], app),
                 Some(Mode::LogPicker) => log_picker::draw(f, chunks[1], app),
                 Some(Mode::LogTail) => log_tail::draw(f, chunks[1], app),
@@ -97,7 +94,6 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
         Mode::Processes => " processes ",
         Mode::Health => " health ",
         Mode::Vultr => " vultr ",
-        Mode::Buyvm => " buyvm ",
         Mode::Money => " money ",
         Mode::LogPicker => " logs ",
         Mode::LogTail => " logs ",

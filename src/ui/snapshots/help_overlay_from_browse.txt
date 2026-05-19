@@ -11,10 +11,10 @@
 │               │ [p]      processes                           │               │
 │               │ [H]      health                              │               │
 │               │ [v]      vultr                               │               │
-└───────────────│ [b]      buyvm                               │               │
-┌ keys (?) ─────│ [m]      money                               │               │
-│ [?]    close  │ [l]      logs                                │               │
-│ [esc]  close  │ [t]      history                             │               │
-│ [q]    close  │ [d]      dns                                 │               │
+└───────────────│ [m]      money                               │               │
+┌ keys (?) ─────│ [l]      logs                                │               │
+│ [?]    close  │ [t]      history                             │               │
+│ [esc]  close  │ [d]      dns                                 │               │
+│ [q]    close  │ [a]      shortcuts                           │               │
 └───────────────└──────────────────────────────────────────────┘───────────────┘
  press [?] for keys

@@ -99,13 +99,6 @@ label = "httpd error"
 path = "/var/log/httpd/error.log"
 hosts = ["web"]
 
-# BuyVM Stallion overlay: helm reads `BUYVM_API_KEY` from the environment.
-# Optional `BUYVM_API_BASE` overrides the default Stallion API root
-# (`https://manage.frantech.ca/api/client`). Same env-only treatment as
-# Vultr — never put the key in this file. If unset, the `b` pane shows
-# `(set $BUYVM_API_KEY to enable …)` and the Browse detail pane omits
-# the buyvm lines. Example: `export BUYVM_API_KEY=...`
-
 # Vultr API overlay: helm reads `VULTR_API_KEY` from the environment.
 # Never put the key in this file — config.toml is gitignored but env-only
 # eliminates the risk of an accidental leak. If the var is unset, the
