@@ -99,8 +99,9 @@ fn draw_body(f: &mut Frame, area: Rect, app: &App, cache: &VultrCache) {
 
 fn draw_confirm_modal(f: &mut Frame, area: Rect, confirm: &crate::app::VultrConfirm) {
     // Centered 60% × 30% box.
-    let w = (area.width * 6 / 10).max(40);
-    let h = 7;
+    let w = (area.width * 6 / 10).max(50);
+    // 7 rows for non-billable actions, +1 for the snapshot cost warning.
+    let h = if confirm.action == crate::vultr::ActionKind::Snapshot { 8 } else { 7 };
     let x = area.x + area.width.saturating_sub(w) / 2;
     let y = area.y + area.height.saturating_sub(h) / 2;
     let modal_area = Rect { x, y, width: w, height: h };
@@ -114,7 +115,7 @@ fn draw_confirm_modal(f: &mut Frame, area: Rect, confirm: &crate::app::VultrConf
     f.render_widget(ratatui::widgets::Clear, modal_area);
     f.render_widget(block, modal_area);
 
-    let lines = vec![
+    let mut lines = vec![
         ratatui::text::Line::from(vec![
             Span::raw("action: "),
             Span::styled(
@@ -133,20 +134,33 @@ fn draw_confirm_modal(f: &mut Frame, area: Rect, confirm: &crate::app::VultrConf
                 Style::default().fg(Color::DarkGray),
             ),
         ]),
-        ratatui::text::Line::from(""),
-        ratatui::text::Line::from(vec![
-            Span::styled(
-                "[y]",
-                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" confirm   "),
-            Span::styled(
-                "[n/esc]",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" cancel"),
-        ]),
     ];
+    if confirm.action == crate::vultr::ActionKind::Snapshot {
+        lines.push(ratatui::text::Line::from(vec![
+            Span::styled(
+                "$ ",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "BILLABLE",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" — vultr charges ~$0.05/GB/mo until deleted"),
+        ]));
+    }
+    lines.push(ratatui::text::Line::from(""));
+    lines.push(ratatui::text::Line::from(vec![
+        Span::styled(
+            "[y]",
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" confirm   "),
+        Span::styled(
+            "[n/esc]",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" cancel"),
+    ]));
     f.render_widget(Paragraph::new(lines), inner);
 }
 
