@@ -10,6 +10,7 @@ use crate::inventory::ports::{self as ports_inv, ListeningSocket};
 use crate::inventory::processes::{self as procs_inv, Process};
 use crate::inventory::services::{parse_rcctl, Service};
 use crate::money::{self, MoneyCache, MoneyResult, MoneySlot};
+use crate::buyvm::{self, BuyvmCache, BuyvmResult};
 use crate::vultr::{self, VultrCache, VultrResult, VultrSlot};
 use crate::ipc::protocol::{Event as IpcEvent, Request as IpcRequest};
 use crate::ipc::server::Job;
@@ -309,11 +310,16 @@ pub enum Mode {
     Processes,
     Health,
     Vultr,
+    Buyvm,
     Money,
     LogPicker,
     LogTail,
     History,
     Dns,
+}
+
+pub struct BuyvmState {
+    pub rx: Receiver<BuyvmResult>,
 }
 
 pub struct DnsState {
@@ -600,6 +606,12 @@ pub struct App {
     /// "API key not set" from "fetch in flight" for the empty pane.
     pub vultr_fetch_attempted: bool,
 
+    pub buyvm_pane: Option<BuyvmState>,
+    pub buyvm_cache: Option<BuyvmCache>,
+    pub buyvm_error: Option<String>,
+    pub buyvm_fetch_attempted: bool,
+    pub buyvm_scroll: ScrollState,
+
     pub money_pane: Option<MoneyState>,
     pub money_cache: Option<MoneyCache>,
     /// True once `start_money_fetch` has run at least once. Mirrors the
@@ -669,6 +681,11 @@ impl App {
             vultr_cache: None,
             vultr_error: None,
             vultr_fetch_attempted: false,
+            buyvm_pane: None,
+            buyvm_cache: None,
+            buyvm_error: None,
+            buyvm_fetch_attempted: false,
+            buyvm_scroll: ScrollState::new_top(),
             money_pane: None,
             money_cache: None,
             money_fetch_attempted: false,
@@ -1190,6 +1207,68 @@ impl App {
 
     pub fn open_vultr(&mut self) {
         self.mode = Mode::Vultr;
+    }
+
+    /// Fire a background BuyVM fetch using `BUYVM_API_KEY` (and optional
+    /// `BUYVM_API_BASE`) from the environment. No-op if the key is unset.
+    pub fn start_buyvm_fetch(&mut self) {
+        let Ok(key) = std::env::var("BUYVM_API_KEY") else {
+            return;
+        };
+        if key.trim().is_empty() {
+            return;
+        }
+        let base = std::env::var("BUYVM_API_BASE")
+            .unwrap_or_else(|_| buyvm::DEFAULT_API_BASE.to_string());
+        self.buyvm_fetch_attempted = true;
+        self.buyvm_error = None;
+        let rx = buyvm::spawn_buyvm_fetch(key, base.clone());
+        self.buyvm_pane = Some(BuyvmState { rx });
+        // Keep the base around for the cache so the UI can show it on
+        // refresh errors / future per-service deep links.
+        if let Some(cache) = self.buyvm_cache.as_mut() {
+            cache.api_base = base;
+        }
+    }
+
+    pub fn ingest_buyvm_events(&mut self) {
+        let Some(s) = self.buyvm_pane.as_mut() else {
+            return;
+        };
+        let Ok(res) = s.rx.try_recv() else {
+            return;
+        };
+        // Single-shot fetch — drop the pane regardless of outcome.
+        self.buyvm_pane = None;
+        let body = match res.output {
+            Ok(b) => b,
+            Err(e) => {
+                self.buyvm_error = Some(e);
+                return;
+            }
+        };
+        match buyvm::parse_services(&body) {
+            Ok(services) => {
+                let api_base = std::env::var("BUYVM_API_BASE")
+                    .unwrap_or_else(|_| buyvm::DEFAULT_API_BASE.to_string());
+                self.buyvm_cache = Some(BuyvmCache { services, api_base });
+            }
+            Err(e) => self.buyvm_error = Some(e),
+        }
+    }
+
+    pub fn open_buyvm(&mut self) {
+        self.mode = Mode::Buyvm;
+    }
+
+    pub fn refresh_buyvm(&mut self) {
+        self.start_buyvm_fetch();
+    }
+
+    pub fn close_buyvm(&mut self) {
+        if self.mode == Mode::Buyvm {
+            self.mode = Mode::Browse;
+        }
     }
 
     pub fn refresh_vultr(&mut self) {

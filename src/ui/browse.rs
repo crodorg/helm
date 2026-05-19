@@ -101,6 +101,26 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
                     ));
                 }
             }
+            if let Some(cache) = app.buyvm_cache.as_ref() {
+                if let Some(svc) = cache.service_for_ip(h.display_hostname()) {
+                    v.push(Line::from(""));
+                    let cost = svc
+                        .monthly_cost()
+                        .map(|c| format!("${c:.2}/mo"))
+                        .unwrap_or_else(|| "?".into());
+                    v.push(kv(
+                        "buyvm",
+                        &format!(
+                            "location={}  package={}  {}",
+                            svc.location, svc.package, cost
+                        ),
+                    ));
+                    v.push(kv(
+                        "",
+                        &format!("status={}  id={}", svc.status, svc.id_str()),
+                    ));
+                }
+            }
             let bizes: Vec<_> = app
                 .config
                 .businesses

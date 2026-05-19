@@ -1,4 +1,5 @@
 mod app;
+mod buyvm;
 mod config;
 mod history;
 mod inventory;
@@ -292,6 +293,7 @@ fn run_tui() -> Result<()> {
         Err(e) => eprintln!("helm: warning — could not open history db: {e}"),
     }
     app.start_vultr_fetch();
+    app.start_buyvm_fetch();
     // Eager money fetch when any business declares Stripe/Mercury linkage,
     // so the Browse detail panel renders balances without forcing the
     // operator to press `m` first.
@@ -363,6 +365,7 @@ fn run(terminal: &mut Term, app: &mut App) -> Result<()> {
         app.ingest_processes_events();
         app.ingest_health_events();
         app.ingest_vultr_events();
+        app.ingest_buyvm_events();
         app.ingest_money_events();
         app.ingest_dns_events();
         app.ingest_postmark_events();
@@ -400,6 +403,7 @@ fn handle_key(app: &mut App, code: KeyCode) {
         Mode::Processes => handle_processes(app, code),
         Mode::Health => handle_health(app, code),
         Mode::Vultr => handle_vultr(app, code),
+        Mode::Buyvm => handle_buyvm(app, code),
         Mode::Money => handle_money(app, code),
         Mode::LogPicker => handle_log_picker(app, code),
         Mode::LogTail => handle_log_tail(app, code),
@@ -504,6 +508,17 @@ fn handle_vultr(app: &mut App, code: KeyCode) {
     }
 }
 
+fn handle_buyvm(app: &mut App, code: KeyCode) {
+    if handle_scroll_keys(&app.buyvm_scroll, code) {
+        return;
+    }
+    match code {
+        KeyCode::Esc => app.close_buyvm(),
+        KeyCode::Char('r') => app.refresh_buyvm(),
+        _ => {}
+    }
+}
+
 fn handle_health(app: &mut App, code: KeyCode) {
     if let Some(state) = app.health_pane.as_ref() {
         if handle_scroll_keys(&state.scroll, code) {
@@ -550,6 +565,7 @@ fn handle_browse(app: &mut App, code: KeyCode) {
         KeyCode::Char('p') => app.open_processes(),
         KeyCode::Char('h') => app.open_health(),
         KeyCode::Char('v') => app.open_vultr(),
+        KeyCode::Char('b') => app.open_buyvm(),
         KeyCode::Char('m') => app.open_money(),
         KeyCode::Char('l') => app.open_log_picker(),
         KeyCode::Char('t') => app.open_history(),

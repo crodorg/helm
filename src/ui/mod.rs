@@ -1,5 +1,6 @@
 mod agent;
 mod browse;
+mod buyvm;
 mod dns;
 mod health;
 mod history;
@@ -47,6 +48,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         Mode::Processes => processes::draw(f, chunks[1], app),
         Mode::Health => health::draw(f, chunks[1], app),
         Mode::Vultr => vultr::draw(f, chunks[1], app),
+        Mode::Buyvm => buyvm::draw(f, chunks[1], app),
         Mode::Money => money::draw(f, chunks[1], app),
         Mode::LogPicker => {
             // Render Browse beneath, then overlay the log picker modal.
@@ -70,6 +72,7 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
         Mode::Processes => " processes ",
         Mode::Health => " health ",
         Mode::Vultr => " vultr ",
+        Mode::Buyvm => " buyvm ",
         Mode::Money => " money ",
         Mode::LogPicker => " logs ",
         Mode::LogTail => " logs ",
@@ -109,7 +112,7 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     let hints = match (app.mode, app.runner.focus) {
-        (Mode::Browse, _) => " [j/k] move   [enter] ssh   [r] run cmd   [s] services   [p] processes   [h] health   [v] vultr   [m] money   [l] logs   [t] history   [d] dns   [a] shortcuts   [c] agent tail   [q] quit ",
+        (Mode::Browse, _) => " [j/k] move   [enter] ssh   [r] run cmd   [s] services   [p] processes   [h] health   [v] vultr   [b] buyvm   [m] money   [l] logs   [t] history   [d] dns   [a] shortcuts   [c] agent tail   [q] quit ",
         (Mode::Runner, Some(InputFocus::Password)) => " typing password — [enter] submit   [esc] cancel ",
         (Mode::Runner, Some(InputFocus::Command)) => " typing command — [enter] run   [esc] back ",
         (Mode::Runner, None) => " [j/k] scroll   [pgup/pgdn] page   [g/G] top/bottom   [r] new cmd   [esc] back ",
@@ -119,6 +122,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         (Mode::Processes, _) => " [j/k] scroll   [pgup/pgdn] page   [r] refresh   [esc] back ",
         (Mode::Health, _) => " [j/k] scroll   [pgup/pgdn] page   [r] refresh   [esc] back ",
         (Mode::Vultr, _) => " [j/k] scroll   [pgup/pgdn] page   [r] refresh   [esc] back ",
+        (Mode::Buyvm, _) => " [j/k] scroll   [pgup/pgdn] page   [r] refresh   [esc] back ",
         (Mode::Money, _) => " [r] refresh   [esc] back ",
         (Mode::LogPicker, _) => " press a log key   [esc] cancel ",
         (Mode::LogTail, _) => " [j/k] scroll   [pgup/pgdn] page   [g/G] top/bottom   [esc] kill tail + back ",

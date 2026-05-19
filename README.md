@@ -36,6 +36,7 @@ v0.1 ships:
 - Press `p` → processes pane: fires `ps -axo` + `netstat -na` in parallel, renders top 20 processes by CPU and all listening sockets
 - Press `h` → health pane: per business, runs local `curl` (HTTP status + ms) and `openssl s_client | openssl x509` (TLS expiry) against `primary_domain`; rows fill in as probes return, colored red <14d / yellow <30d / green otherwise
 - Press `v` → vultr pane: shells out to `curl` against `GET /v2/instances` + `/v2/plans` (set `VULTR_API_KEY`); table shows label / region / plan / $/mo / status / power / IP; Browse detail pane gets a `vultr` line for any host whose `hostname` matches a Vultr `main_ip`
+- Press `b` → buyvm pane: shells `curl` against `GET {BUYVM_API_BASE}/services` (default base `https://manage.frantech.ca/api/client`, override with `BUYVM_API_BASE`; set `BUYVM_API_KEY`); table shows label / location / package / $/mo / status / IP; parser is tolerant of both `{"data": [...]}` Stallion-wrapped and bare-array legacy responses, and accepts a handful of field aliases (`hostname`/`primary_ipv4`/`product_name`/etc.); Browse detail gets a `buyvm` line for matched hosts
 - Press `m` → money pane: shells out to `stripe-pp-cli balance` + `mercury-pp-cli accounts` in parallel (each CLI handles its own auth via `STRIPE_SECRET_KEY` / `MERCURY_BEARER_AUTH`); Stripe block shows available / pending / total, Mercury table lists each account with current + available balance and a row-1 total. Each `[[businesses]]` may set `stripe_account_id` + `mercury_account_id` — the matching slice renders inline under the business bullet on the Browse detail panel, and the money fetch fires eagerly on startup when any linkage exists
 - Postmark stats overlay: `[[businesses]]` may set `postmark_server_token` — helm fires `curl` against `https://api.postmarkapp.com/stats/outbound` (last 30 days UTC) on startup; token rides in `X-Postmark-Server-Token` via curl's `-H @-` stdin so it stays out of argv. Sent / bounced (+ rate) / spam (+ rate) render inline on the Browse detail panel
 - Press `l` → log picker: built-in defaults (messages / daemon / authlog) plus any `[[logs]]` from config that match the selected host; single-char key launches `ssh -tt <alias> tail -n 200 -f <path>` streaming live into a scrolling pane (capped at 5000 lines); Esc kills the tail and returns to Browse
@@ -46,9 +47,8 @@ v0.1 ships:
 - `helm shell open <alias>` (CLI subcommand) attaches a terminal to a persistent tmux session on the remote VPS — sessions survive helm restarts and network drops; `helm shell send / read / list / close` drive the same session for scripted or AI-assisted workflows
 
 Not yet wired:
-- BuyVM provider API
-- DNS record sanity check
-- Postmark business overlay
+- Vultr actions (reboot / snapshot from `v` pane)
+- `helm auth` bootstrap subcommand
 
 ## Setup
 
@@ -94,6 +94,7 @@ Browse:
 - `p` — processes pane
 - `h` — health pane
 - `v` — vultr pane (needs `VULTR_API_KEY`)
+- `b` — buyvm pane (needs `BUYVM_API_KEY`; override base via `BUYVM_API_BASE`)
 - `m` — money pane (needs `stripe-pp-cli` + `mercury-pp-cli` auth)
 - `l` — logs picker (built-in defaults + `[[logs]]` from config)
 - `t` — history pane (past `helm exec` + Runner runs from `state.db`; Enter replays into the runner)
@@ -134,6 +135,7 @@ src/
 │   ├── health.rs         curl + openssl x509 parsers + local probe runner
 │   └── dns.rs            drill/dig wrapper + A-vs-expected-IP verdict
 ├── vultr.rs              GET /v2/instances + /v2/plans via curl + serde_json
+├── buyvm.rs              GET {BUYVM_API_BASE}/services via curl + serde_json
 ├── money.rs              stripe-pp-cli + mercury-pp-cli shell-out + parsers
 ├── postmark.rs           curl + Postmark /stats/outbound parser (token via stdin)
 ├── history.rs            rusqlite-bundled HistoryStore: runs + run_lines tables
@@ -145,6 +147,7 @@ src/
     ├── processes.rs      processes + listening sockets table
     ├── health.rs         per-business HTTP + TLS table
     ├── vultr.rs          per-instance table from VultrCache
+    ├── buyvm.rs          per-service table from BuyvmCache (Stallion API)
     ├── money.rs          Stripe block + Mercury accounts table
     ├── log_picker.rs     modal palette: keyed shortcuts → tail paths
     ├── log_tail.rs       scrolling pane that auto-sticks to the latest line
@@ -237,6 +240,6 @@ In rough order:
 9. ~~Per-business Stripe + Mercury linkage — map each `[[businesses]]` to one Stripe account + one Mercury account; render its slice on the business detail panel instead of one fleet-wide block~~ — done (Mercury renders per-account balance inline; Stripe shows a linkage badge — per-Connect-account balance is a follow-up)
 10. ~~DNS sanity check — for each business `primary_domain`, resolve A/AAAA + MX + CAA and surface mismatches against the host's known public IP~~ — done
 11. ~~Postmark stats overlay — per-business send / bounce / spam-complaint counts via Postmark's stats API~~ — done
-12. BuyVM Stallion panel — same shape as the Vultr pane but against BuyVM's Stallion API
+12. ~~BuyVM Stallion panel — same shape as the Vultr pane but against BuyVM's Stallion API~~ — done
 13. Vultr actions — reboot / stop / start / snapshot from the Vultr pane (with a confirm modal — these are irreversible)
 14. `helm auth` subcommand — one-shot bootstrap that loads the VPS key into `ssh-agent`, verifies fingerprints across all hosts, and exits 0 / non-zero so it can be wired into login shells or doas wrappers
