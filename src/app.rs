@@ -383,6 +383,19 @@ pub struct VultrConfirm {
     pub label: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VultrToastKind {
+    Firing,
+    Success,
+    Error,
+}
+
+#[derive(Debug, Clone)]
+pub struct VultrToast {
+    pub kind: VultrToastKind,
+    pub message: String,
+}
+
 impl VultrState {
     fn slot_mut(&mut self, s: VultrSlot) -> &mut Option<Result<String, String>> {
         match s {
@@ -618,6 +631,11 @@ pub struct App {
     /// rows belonging to `money_filtered_businesses()[idx]`. Cycled via
     /// `f` in the money pane.
     pub money_filter: Option<usize>,
+    /// Inline toast for the Vultr pane (action firing / success / error).
+    /// Rendered at the bottom of the `v` pane so the user keeps the
+    /// instance table in view while the action settles. Cleared on
+    /// close_vultr or replaced by the next action.
+    pub vultr_toast: Option<VultrToast>,
     pub runner: RunnerState,
     pub run_handle: Option<RunHandle>,
     pub services: Option<ServicesState>,
@@ -708,6 +726,7 @@ impl App {
             mode: Mode::Browse,
             help_origin: None,
             money_filter: None,
+            vultr_toast: None,
             runner: RunnerState::default(),
             run_handle: None,
             services: None,
@@ -1284,7 +1303,10 @@ impl App {
     /// post-success inventory refresh.
     pub fn vultr_request_action(&mut self, action: ActionKind) {
         if self.vultr_action_rx.is_some() {
-            self.status = "vultr: previous action still in flight — wait for it".into();
+            self.vultr_toast = Some(VultrToast {
+                kind: VultrToastKind::Error,
+                message: "previous action still in flight — wait for it".into(),
+            });
             return;
         }
         let Some(cache) = self.vultr_cache.as_ref() else {
@@ -1316,18 +1338,27 @@ impl App {
             return;
         };
         let Ok(key) = std::env::var("VULTR_API_KEY") else {
-            self.status = "VULTR_API_KEY not set — action skipped".into();
+            self.vultr_toast = Some(VultrToast {
+                kind: VultrToastKind::Error,
+                message: "VULTR_API_KEY not set — action skipped".into(),
+            });
             return;
         };
         if key.trim().is_empty() {
-            self.status = "VULTR_API_KEY empty — action skipped".into();
+            self.vultr_toast = Some(VultrToast {
+                kind: VultrToastKind::Error,
+                message: "VULTR_API_KEY empty — action skipped".into(),
+            });
             return;
         }
-        self.status = format!(
-            "vultr {}: firing on {}…",
-            confirm.action.label(),
-            confirm.label
-        );
+        self.vultr_toast = Some(VultrToast {
+            kind: VultrToastKind::Firing,
+            message: format!(
+                "{}: firing on {}…",
+                confirm.action.label(),
+                confirm.label
+            ),
+        });
         let rx = vultr::spawn_vultr_action(
             key,
             confirm.action,
@@ -1350,21 +1381,23 @@ impl App {
         self.vultr_action_rx = None;
         match res.outcome {
             Ok(_) => {
-                self.status = format!(
-                    "vultr {}: {} ✓ (refreshing inventory)",
-                    res.action.label(),
-                    res.label
-                );
+                self.vultr_toast = Some(VultrToast {
+                    kind: VultrToastKind::Success,
+                    message: format!(
+                        "{}: {} ✓ (refreshing inventory)",
+                        res.action.label(),
+                        res.label
+                    ),
+                });
                 // Vultr's state transition takes a beat; the next fetch
                 // will reflect it. Fire-and-forget.
                 self.start_vultr_fetch();
             }
             Err(e) => {
-                self.status = format!(
-                    "vultr {} on {} failed: {e}",
-                    res.action.label(),
-                    res.label
-                );
+                self.vultr_toast = Some(VultrToast {
+                    kind: VultrToastKind::Error,
+                    message: format!("{} on {} failed: {e}", res.action.label(), res.label),
+                });
             }
         }
     }
@@ -1438,6 +1471,7 @@ impl App {
     pub fn close_vultr(&mut self) {
         if self.mode == Mode::Vultr {
             self.mode = Mode::Browse;
+            self.vultr_toast = None;
         }
     }
 

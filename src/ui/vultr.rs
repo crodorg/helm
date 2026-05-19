@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph},
 };
 
-use crate::app::App;
+use crate::app::{App, VultrToast, VultrToastKind};
 use crate::vultr::{Instance, VultrCache};
 
 pub fn draw(f: &mut Frame, area: Rect, app: &App) {
@@ -37,13 +37,44 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
         return;
     };
 
+    let toast_h: u16 = if app.vultr_toast.is_some() { 1 } else { 0 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(toast_h),
+        ])
         .split(inner);
 
     draw_header(f, chunks[0]);
     draw_body(f, chunks[1], app, cache);
+    if let Some(toast) = app.vultr_toast.as_ref() {
+        draw_toast(f, chunks[2], toast);
+    }
+}
+
+fn draw_toast(f: &mut Frame, area: Rect, toast: &VultrToast) {
+    let (label, bg) = match toast.kind {
+        VultrToastKind::Firing => (" FIRING ", Color::Yellow),
+        VultrToastKind::Success => (" OK ", Color::Green),
+        VultrToastKind::Error => (" ERR ", Color::Red),
+    };
+    let line = Line::from(vec![
+        Span::styled(
+            label.to_string(),
+            Style::default()
+                .fg(Color::Black)
+                .bg(bg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            toast.message.clone(),
+            Style::default().fg(bg).add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    f.render_widget(Paragraph::new(line), area);
 }
 
 fn draw_header(f: &mut Frame, area: Rect) {
