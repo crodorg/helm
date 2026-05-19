@@ -1,0 +1,94 @@
+# Copy to config.toml and edit. config.toml is gitignored.
+#
+# Hosts: each VPS or local server you want to manage.
+# `ssh_alias` must resolve via your ~/.ssh/config so ssh-agent + ProxyJump work
+# without helm caring about the details.
+#
+# `hostname`, `user`, and `provider` are OPTIONAL — helm reads ~/.ssh/config at
+# startup and backfills hostname/user from the matching Host block. Add a TOML
+# entry only when you want to override the auto-discovered name/provider or
+# attach businesses/notes to a host.
+
+[[hosts]]
+name = "router"
+ssh_alias = "router"          # entry in ~/.ssh/config
+provider = "local"            # local | vultr | buyvm | unknown
+hostname = "192.168.1.1"
+user = "admin"
+notes = "OpenBSD edge router"
+
+[[hosts]]
+name = "web"
+ssh_alias = "web"
+provider = "vultr"
+hostname = "web.example.org"
+user = "admin"
+notes = "OpenBSD application host"
+
+# Businesses: maps a brand/domain to the host(s) it runs on. Useful when one
+# host serves multiple sites and you want helm to remember the mapping.
+
+[[businesses]]
+name = "example.org"
+primary_domain = "example.org"
+host = "web"
+repo_path = "/home/admin/sites/example"
+deploy_cmd = "doas rcctl restart httpd"
+notes = "Marketing site"
+
+# SSH config auto-discovery. Defaults: enabled, ~/.ssh/config, no ignore list.
+# Aliases listed in `ignore` are dropped from the merged host list (useful for
+# noise like alternate-user aliases — e.g. `router-git` for gitolite).
+
+[ssh_config]
+enabled = true
+# path = "/custom/path/to/ssh_config"
+ignore = ["router-git"]
+
+# Shortcuts — quick-fire remote commands. Press `a` from Browse to open the
+# palette filtered to the selected host, then the shortcut's single-char key.
+# Commands run through the Runner, so `doas` prompts still surface the
+# password modal. Omit `hosts` (or pass an empty list) to apply everywhere.
+
+[[shortcuts]]
+key = "H"
+label = "restart httpd"
+cmd = "doas rcctl restart httpd"
+hosts = ["web"]
+
+[[shortcuts]]
+key = "u"
+label = "uptime + load"
+cmd = "uptime && w -h | wc -l"
+
+# Logs — `l` from Browse opens a picker filtered to the selected host, then
+# the log's single-char key streams `ssh -tt <alias> tail -n 200 -F <path>`.
+# Esc kills the tail. Built-in defaults (m=messages, d=daemon, a=authlog) are
+# always available; custom entries here add to them (and override on key
+# collision for matching hosts). Omit `hosts` to apply to every host.
+
+[[logs]]
+key = "H"
+label = "httpd access"
+path = "/var/log/httpd/access.log"
+hosts = ["web"]
+
+[[logs]]
+key = "E"
+label = "httpd error"
+path = "/var/log/httpd/error.log"
+hosts = ["web"]
+
+# Vultr API overlay: helm reads `VULTR_API_KEY` from the environment.
+# Never put the key in this file — config.toml is gitignored but env-only
+# eliminates the risk of an accidental leak. If the var is unset, the
+# `v` pane shows `(set $VULTR_API_KEY to enable)` and the Browse detail
+# pane omits the Vultr lines. Example: `export VULTR_API_KEY=vultr_...`
+
+# Money overlay (`m` from Browse): helm shells out to two existing CLIs:
+#   stripe-pp-cli balance   — needs STRIPE_SECRET_KEY (or `stripe-pp-cli auth set-token`)
+#   mercury-pp-cli accounts — needs MERCURY_BEARER_AUTH (or `mercury-pp-cli auth set-token`)
+# Both CLIs handle their own auth — helm never reads the tokens. If either
+# CLI is missing or unauthenticated, the corresponding panel renders the
+# CLI's error message. There is intentionally no `[stripe]` or `[mercury]`
+# section in this file: tokens stay env-only by design.

@@ -1,0 +1,375 @@
+use anyhow::{Context, Result};
+use serde::Deserialize;
+use std::path::{Path, PathBuf};
+
+use crate::ssh::sshconfig::SshHost;
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Config {
+    #[serde(default)]
+    pub hosts: Vec<Host>,
+    #[serde(default)]
+    pub businesses: Vec<Business>,
+    #[serde(default)]
+    pub ssh_config: SshConfigSection,
+    #[serde(default)]
+    pub shortcuts: Vec<Shortcut>,
+    #[serde(default)]
+    pub logs: Vec<Log>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Log {
+    /// Single key that selects this log from the picker overlay.
+    pub key: char,
+    /// Human label shown in the picker and the tail pane header.
+    pub label: String,
+    /// Absolute path on the remote host. Tailed via `ssh -tt <alias> tail -F <path>`.
+    pub path: String,
+    /// ssh_alias values this log applies to. Empty = applies to every host.
+    /// Helm filters the picker by the currently selected host.
+    #[serde(default)]
+    pub hosts: Vec<String>,
+}
+
+impl Log {
+    pub fn applies_to(&self, alias: &str) -> bool {
+        self.hosts.is_empty() || self.hosts.iter().any(|h| h == alias)
+    }
+}
+
+/// Built-in OpenBSD log defaults — always shown in the picker so a fresh
+/// install with no `[[logs]]` config still has something useful on `l`.
+pub fn builtin_logs() -> Vec<Log> {
+    vec![
+        Log {
+            key: 'm',
+            label: "messages".into(),
+            path: "/var/log/messages".into(),
+            hosts: Vec::new(),
+        },
+        Log {
+            key: 'd',
+            label: "daemon".into(),
+            path: "/var/log/daemon".into(),
+            hosts: Vec::new(),
+        },
+        Log {
+            key: 'a',
+            label: "authlog".into(),
+            path: "/var/log/authlog".into(),
+            hosts: Vec::new(),
+        },
+    ]
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Shortcut {
+    /// Single key that fires this shortcut from the palette overlay.
+    pub key: char,
+    /// Human label shown in the palette and history.
+    pub label: String,
+    /// The actual remote command. Runs through the existing Runner, so
+    /// `doas` prompts surface the password modal.
+    pub cmd: String,
+    /// ssh_alias values this shortcut applies to. Empty = applies to every
+    /// host. Helm filters the palette by the currently selected host.
+    #[serde(default)]
+    pub hosts: Vec<String>,
+}
+
+impl Shortcut {
+    pub fn applies_to(&self, alias: &str) -> bool {
+        self.hosts.is_empty() || self.hosts.iter().any(|h| h == alias)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Host {
+    pub name: String,
+    pub ssh_alias: String,
+    #[serde(default)]
+    pub provider: Provider,
+    #[serde(default)]
+    pub hostname: Option<String>,
+    #[serde(default)]
+    pub user: Option<String>,
+    #[serde(default)]
+    pub notes: String,
+}
+
+impl Host {
+    pub fn display_hostname(&self) -> &str {
+        self.hostname.as_deref().unwrap_or("?")
+    }
+    pub fn display_user(&self) -> &str {
+        self.user.as_deref().unwrap_or("?")
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Provider {
+    Local,
+    Vultr,
+    Buyvm,
+    #[default]
+    Unknown,
+}
+
+impl Provider {
+    pub fn label(self) -> &'static str {
+        match self {
+            Provider::Local => "LOCAL",
+            Provider::Vultr => "VULTR",
+            Provider::Buyvm => "BUYVM",
+            Provider::Unknown => "  ?  ",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct Business {
+    pub name: String,
+    pub primary_domain: String,
+    pub host: String,
+    #[serde(default)]
+    pub repo_path: String,
+    #[serde(default)]
+    pub deploy_cmd: String,
+    #[serde(default)]
+    pub notes: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SshConfigSection {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub path: Option<PathBuf>,
+    #[serde(default)]
+    pub ignore: Vec<String>,
+}
+
+impl Default for SshConfigSection {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            path: None,
+            ignore: Vec::new(),
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Config {
+    pub fn load() -> Result<Self> {
+        let cwd = std::env::current_dir()?;
+        let local = cwd.join("config.toml");
+        if local.exists() {
+            return Self::load_from(&local);
+        }
+        if let Some(dirs) = directories::ProjectDirs::from("", "", "helm") {
+            let p = dirs.config_dir().join("config.toml");
+            if p.exists() {
+                return Self::load_from(&p);
+            }
+        }
+        // No config.toml found — return defaults so ssh_config-only operation works.
+        Ok(Config::default())
+    }
+
+    pub fn load_from(path: &Path) -> Result<Self> {
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("read config at {}", path.display()))?;
+        let cfg: Config = toml::from_str(&raw).context("parse config TOML")?;
+        Ok(cfg)
+    }
+
+    /// Merge hosts discovered in `~/.ssh/config` into `self.hosts`.
+    ///
+    /// Rules:
+    /// - If `ssh_config.ignore` lists the alias, drop it.
+    /// - If a TOML host already declares this `ssh_alias`, backfill its
+    ///   `hostname` / `user` from ssh config when missing. TOML wins on
+    ///   everything else (name, provider, notes).
+    /// - Otherwise synthesize a new host with `provider = Unknown` (or
+    ///   `Local` if hostname looks RFC1918 / loopback).
+    pub fn merge_ssh_hosts(&mut self, ssh_hosts: Vec<SshHost>) {
+        let ignore: std::collections::HashSet<&str> =
+            self.ssh_config.ignore.iter().map(String::as_str).collect();
+
+        for sh in ssh_hosts {
+            if ignore.contains(sh.alias.as_str()) {
+                continue;
+            }
+            if let Some(existing) = self.hosts.iter_mut().find(|h| h.ssh_alias == sh.alias) {
+                if existing.hostname.is_none() {
+                    existing.hostname = sh.hostname;
+                }
+                if existing.user.is_none() {
+                    existing.user = sh.user;
+                }
+            } else {
+                let provider = infer_provider(sh.hostname.as_deref());
+                self.hosts.push(Host {
+                    name: sh.alias.clone(),
+                    ssh_alias: sh.alias,
+                    provider,
+                    hostname: sh.hostname,
+                    user: sh.user,
+                    notes: String::new(),
+                });
+            }
+        }
+    }
+}
+
+fn infer_provider(hostname: Option<&str>) -> Provider {
+    let Some(h) = hostname else {
+        return Provider::Unknown;
+    };
+    if let Ok(ip) = h.parse::<std::net::IpAddr>() {
+        if ip.is_loopback() {
+            return Provider::Local;
+        }
+        if let std::net::IpAddr::V4(v4) = ip {
+            let o = v4.octets();
+            let rfc1918 = o[0] == 10
+                || (o[0] == 172 && (16..=31).contains(&o[1]))
+                || (o[0] == 192 && o[1] == 168);
+            if rfc1918 {
+                return Provider::Local;
+            }
+        }
+    } else if h == "localhost" || h.ends_with(".local") {
+        return Provider::Local;
+    }
+    Provider::Unknown
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_example_config() {
+        let example = include_str!("../config.example.toml");
+        let cfg: Config = toml::from_str(example).expect("example config parses");
+        assert!(!cfg.hosts.is_empty());
+        assert!(!cfg.businesses.is_empty());
+        assert_eq!(cfg.hosts[0].provider, Provider::Local);
+    }
+
+    #[test]
+    fn unknown_provider_rejected() {
+        let bad = r#"
+            [[hosts]]
+            name = "x"
+            ssh_alias = "x"
+            provider = "aws"
+            hostname = "x"
+            user = "x"
+        "#;
+        assert!(toml::from_str::<Config>(bad).is_err());
+    }
+
+    #[test]
+    fn provider_defaults_to_unknown_and_fields_optional() {
+        let minimal = r#"
+            [[hosts]]
+            name = "h"
+            ssh_alias = "h"
+        "#;
+        let cfg: Config = toml::from_str(minimal).expect("minimal host parses");
+        assert_eq!(cfg.hosts[0].provider, Provider::Unknown);
+        assert!(cfg.hosts[0].hostname.is_none());
+        assert!(cfg.hosts[0].user.is_none());
+    }
+
+    #[test]
+    fn merge_backfills_missing_hostname_and_user() {
+        let mut cfg: Config = toml::from_str(
+            r#"
+            [[hosts]]
+            name = "vps1"
+            ssh_alias = "vps1"
+            provider = "vultr"
+            notes = "app server"
+            "#,
+        )
+        .unwrap();
+        cfg.merge_ssh_hosts(vec![SshHost {
+            alias: "vps1".into(),
+            hostname: Some("203.0.113.10".into()),
+            user: Some("admin".into()),
+            port: None,
+            identity_file: None,
+        }]);
+        assert_eq!(cfg.hosts.len(), 1);
+        let h = &cfg.hosts[0];
+        assert_eq!(h.provider, Provider::Vultr);
+        assert_eq!(h.hostname.as_deref(), Some("203.0.113.10"));
+        assert_eq!(h.user.as_deref(), Some("admin"));
+        assert_eq!(h.notes, "app server");
+    }
+
+    #[test]
+    fn merge_synthesizes_unknown_hosts_and_infers_local() {
+        let mut cfg = Config::default();
+        cfg.merge_ssh_hosts(vec![
+            SshHost {
+                alias: "router".into(),
+                hostname: Some("192.168.1.1".into()),
+                user: Some("admin".into()),
+                port: None,
+                identity_file: None,
+            },
+            SshHost {
+                alias: "vps1".into(),
+                hostname: Some("203.0.113.10".into()),
+                user: Some("admin".into()),
+                port: None,
+                identity_file: None,
+            },
+        ]);
+        assert_eq!(cfg.hosts.len(), 2);
+        let r = cfg.hosts.iter().find(|h| h.name == "router").unwrap();
+        assert_eq!(r.provider, Provider::Local);
+        let t = cfg.hosts.iter().find(|h| h.name == "vps1").unwrap();
+        assert_eq!(t.provider, Provider::Unknown);
+    }
+
+    #[test]
+    fn merge_respects_ignore_list() {
+        let mut cfg: Config = toml::from_str(
+            r#"
+            [ssh_config]
+            ignore = ["router-git"]
+            "#,
+        )
+        .unwrap();
+        cfg.merge_ssh_hosts(vec![
+            SshHost {
+                alias: "router-git".into(),
+                hostname: Some("192.168.1.1".into()),
+                user: Some("git".into()),
+                port: None,
+                identity_file: None,
+            },
+            SshHost {
+                alias: "router".into(),
+                hostname: Some("192.168.1.1".into()),
+                user: Some("admin".into()),
+                port: None,
+                identity_file: None,
+            },
+        ]);
+        let aliases: Vec<&str> = cfg.hosts.iter().map(|h| h.ssh_alias.as_str()).collect();
+        assert_eq!(aliases, vec!["router"]);
+    }
+}
