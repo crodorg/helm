@@ -1841,6 +1841,17 @@ impl App {
         // Drop the money filter — its index referred to the previous
         // businesses list and is no longer meaningful.
         self.money_filter = None;
+        // Invalidate every overlay cache so removed entries stop
+        // rendering and added entries don't sit forever as "fetching".
+        // refresh_all_overlays re-fires the fetches; ingest loops will
+        // repopulate as results arrive.
+        self.vultr_cache = None;
+        self.money_cache = None;
+        self.postmark_results.clear();
+        self.postmark_fetch_attempted = false;
+        self.dns_pane = None;
+        self.health_pane = None;
+        self.refresh_all_overlays();
         self.status = format!("config reloaded: {hosts} hosts, {businesses} businesses");
     }
 
