@@ -351,6 +351,13 @@ fn run_auth_cli(args: &[String]) -> std::process::ExitCode {
             // Interactive: exec `ssh-add <path>` per missing key so the
             // user can type the passphrase. We inherit stdio so the
             // prompt lands in the operator's terminal.
+            //
+            // Failure handling: keep going on ssh-add error (so a typo'd
+            // passphrase on key #2 doesn't hide that keys #3..N were
+            // never attempted). Track loaded count for a final summary.
+            let total = missing.len();
+            let mut loaded_ok: Vec<&std::path::Path> = Vec::new();
+            let mut failed: Vec<&std::path::Path> = Vec::new();
             for m in missing {
                 eprintln!(
                     "helm auth: loading {} (used by {})…",
@@ -363,18 +370,28 @@ fn run_auth_cli(args: &[String]) -> std::process::ExitCode {
                     .stdout(std::process::Stdio::inherit())
                     .stderr(std::process::Stdio::inherit())
                     .status();
-                if !matches!(st, std::result::Result::Ok(s) if s.success()) {
-                    eprintln!(
-                        "helm auth: ssh-add {} failed",
-                        m.identity_file.display()
-                    );
-                    return std::process::ExitCode::FAILURE;
+                if matches!(st, std::result::Result::Ok(s) if s.success()) {
+                    loaded_ok.push(&m.identity_file);
+                } else {
+                    failed.push(&m.identity_file);
                 }
             }
-            // Re-check after the load.
+            if !failed.is_empty() {
+                eprintln!(
+                    "helm auth: loaded {}/{} keys ({} failed)",
+                    loaded_ok.len(),
+                    total,
+                    failed.len()
+                );
+                for p in &failed {
+                    eprintln!("  ✗ {}", p.display());
+                }
+                return std::process::ExitCode::FAILURE;
+            }
+            // All ssh-add calls returned 0 — re-check agent state.
             match crate::ssh::agent::check(&ssh_hosts) {
                 AgentStatus::Ok => {
-                    eprintln!("helm auth: keys loaded — agent OK");
+                    eprintln!("helm auth: {total} key(s) loaded — agent OK");
                     std::process::ExitCode::SUCCESS
                 }
                 _ => {

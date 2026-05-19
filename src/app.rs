@@ -1258,7 +1258,16 @@ impl App {
     /// instance. No-op when the pane has no cache or the cursor sits on
     /// nothing. The action itself does not fire until `vultr_confirm_action`
     /// is called.
+    ///
+    /// Refuses to stage a second action while one is in flight: the
+    /// previous request's result would otherwise be dropped on the floor
+    /// (single-shot receiver), masking failures and skipping the
+    /// post-success inventory refresh.
     pub fn vultr_request_action(&mut self, action: ActionKind) {
+        if self.vultr_action_rx.is_some() {
+            self.status = "vultr: previous action still in flight — wait for it".into();
+            return;
+        }
         let Some(cache) = self.vultr_cache.as_ref() else {
             return;
         };

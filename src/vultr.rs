@@ -172,10 +172,13 @@ impl ActionKind {
 
     /// JSON body Vultr expects for this action. `Snapshot` needs the
     /// instance id in the body; the per-instance actions send no body.
+    /// Built via `serde_json::json!` so any character in the id is
+    /// properly escaped — Vultr ids are UUID-ish today but the parser
+    /// reads them as strings, so this is defense in depth.
     pub fn body_for(self, instance_id: &str) -> Option<String> {
         match self {
             ActionKind::Snapshot => {
-                Some(format!(r#"{{"instance_id":"{instance_id}"}}"#))
+                Some(serde_json::json!({ "instance_id": instance_id }).to_string())
             }
             _ => None,
         }
@@ -359,6 +362,19 @@ mod tests {
         assert_eq!(ActionKind::Reboot.body_for("abc-1"), None);
         assert_eq!(ActionKind::Halt.body_for("abc-1"), None);
         assert_eq!(ActionKind::Start.body_for("abc-1"), None);
+    }
+
+    #[test]
+    fn snapshot_body_escapes_special_characters() {
+        // Defense in depth — Vultr ids are alphanumeric in practice but
+        // the parser doesn't enforce that. A quote or backslash in the
+        // id must not break the JSON.
+        let body = ActionKind::Snapshot
+            .body_for(r#"weird"id\here"#)
+            .expect("snapshot has body");
+        // Round-trip via serde_json to confirm it's valid + correct.
+        let v: serde_json::Value = serde_json::from_str(&body).expect("valid json");
+        assert_eq!(v["instance_id"], r#"weird"id\here"#);
     }
 
     #[test]

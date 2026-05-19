@@ -144,15 +144,16 @@ enum Tool {
 }
 
 fn pick_tool() -> Option<Tool> {
-    // PATH lookup via `Command::new(...).output()` with `-h` would also
-    // work; simpler to just check `which`.
+    // Spawn the actual tool with a cheap probe rather than shelling out
+    // to `which` — which is a shell builtin on some systems (notably
+    // minimal containers) and not on PATH. `Command::new` returns
+    // ErrorKind::NotFound when the binary doesn't exist, regardless of
+    // what the probe args do, so we just check that spawn succeeded.
     for (name, t) in [("drill", Tool::Drill), ("dig", Tool::Dig)] {
-        if Command::new("which")
-            .arg(name)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-        {
+        // `-v` prints a version banner on both tools; we don't read the
+        // output, just the spawn outcome. Timeout via no I/O — these
+        // exit immediately.
+        if Command::new(name).arg("-v").output().is_ok() {
             return Some(t);
         }
     }
