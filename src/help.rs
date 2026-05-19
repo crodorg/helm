@@ -72,10 +72,11 @@ pub fn format_footer(bindings: &[Binding]) -> String {
     s
 }
 
-const BROWSE: [Binding; 16] = [
+const BROWSE: [Binding; 17] = [
     b("j/k", "move"),
     b("enter", "ssh"),
     b("r", "run cmd"),
+    b("R", "refresh-all overlays"),
     b("s", "services"),
     b("p", "processes"),
     b("h", "health"),

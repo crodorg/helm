@@ -1799,6 +1799,22 @@ impl App {
         }
     }
 
+    /// Re-fire every background fetch in one shot — vultr, buyvm, money,
+    /// postmark, dns, health. Each underlying start_* guards its own
+    /// preconditions (missing env var, empty businesses list), so this
+    /// stays a single key away from the operator. Used by Browse `R`.
+    pub fn refresh_all_overlays(&mut self) {
+        self.start_vultr_fetch();
+        self.start_buyvm_fetch();
+        self.start_money_fetch();
+        self.start_postmark_fetch();
+        if !self.config.businesses.is_empty() {
+            self.dns_pane = Some(spawn_dns_state(&self.config));
+            self.health_pane = Some(spawn_health_state(&self.config.businesses));
+        }
+        self.status = "refreshing: vultr · buyvm · money · postmark · dns · health".into();
+    }
+
     pub fn ingest_dns_events(&mut self) {
         let Some(s) = self.dns_pane.as_mut() else {
             return;

@@ -765,6 +765,7 @@ fn handle_browse(app: &mut App, code: KeyCode) {
         KeyCode::Char('d') => app.open_dns(),
         KeyCode::Char('a') => app.open_shortcuts(),
         KeyCode::Char('c') => app.open_agent_tail(),
+        KeyCode::Char('R') => app.refresh_all_overlays(),
         _ => {}
     }
 }

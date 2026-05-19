@@ -128,6 +128,7 @@ Browse:
 - `a` — shortcuts palette
 - `c` — agent tail
 - `?` — in-TUI help (key list for the current pane; works from any non-text-input mode)
+- `R` — refresh-all overlays (re-fires vultr + buyvm + money + postmark + dns + health in one shot)
 - `q` / `Esc` — quit
 
 Runner (typing command):
@@ -280,7 +281,7 @@ In rough order:
 15. ~~In-TUI help menu — `?` from any mode opens a modal palette listing every key binding for the current pane (fzf-style)~~ — done
 16. ~~Per-Connect Stripe balance — extend `stripe-pp-cli` shell-out with `--stripe-account acct_…` so each business's detail line shows its own slice instead of the fleet-wide total~~ — done
 17. ~~TUI snapshot tests — render ratatui buffers into strings, diff against fixtures; catches UI regressions without manual smoke~~ — done
-18. Refresh-all key — single keypress that re-fires vultr + buyvm + money + postmark + dns + health together (currently 6 separate `r` presses across panes)
+18. ~~Refresh-all key — single keypress that re-fires vultr + buyvm + money + postmark + dns + health together (currently 6 separate `r` presses across panes)~~ — done (`R` from Browse)
 19. Money pane: per-business filter — `f` to filter Mercury rows by the configured `mercury_account_id` mapping
 20. Vultr action toast — render action results inline in the `v` pane instead of the global status line so context is preserved
 21. Runtime config reload — `R` from Browse re-reads `config.toml` without quitting helm
