@@ -3,3 +3,4 @@ config.toml
 *.db
 *.db-journal
 .env
+.claude/settings.local.json

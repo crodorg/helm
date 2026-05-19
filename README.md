@@ -4,6 +4,26 @@ TUI fleet manager for a small set of OpenBSD VPSs and the businesses inside them
 
 Single-operator workflow. Built around the assumption that you already have a working `~/.ssh/config`, a loaded `ssh-agent`, and a handful of hosts you log into often. Helm gives you one place to browse them, drop into shells, and run ad-hoc remote commands — including ones that need a `doas` password.
 
+## Why this exists
+
+Tiny fleets — five or ten VPSs, one operator, no Kubernetes, no Datadog — live in an awkward gap. They are too small to justify a control plane and too many to babysit with `ssh + watch + tmux` alone. Helm is the missing inner-loop tool for that gap:
+
+- **One pane for "what's actually running":** `s` shows every `rcctl` service across a host, color-coded by state. `p` shows top CPU + every listening socket. `h` pings each business's primary domain for HTTP status, latency, and TLS expiry — all in parallel, all from your laptop.
+- **One pane for "how much is this costing me":** `v` joins Vultr's `/v2/instances` and `/v2/plans` into one table — region, plan, monthly cost, power state, IP. `m` sums Stripe + Mercury balances so you can see runway and revenue without opening two dashboards.
+- **One pane for "ssh in and fix it":** `Enter` drops the TUI and hands the terminal to plain `ssh <alias>`. `r` runs ad-hoc commands with a live `doas`-prompt-aware password modal. `l` tails any log file the host knows about. Everything writes through your existing `~/.ssh/config` and `ssh-agent` — no new auth surface.
+- **Persistent shells the operator and an AI agent can share:** `helm shell` creates a remote-side tmux session that survives helm restarts, network drops, and laptop sleeps; an attached AI assistant can `read` scrollback and `send` keystrokes while the operator watches live. See [Driving helm from an AI agent](#driving-helm-from-an-ai-agent).
+
+## Is this for you?
+
+Probably not, and that's fine — this is a personal tool built for one specific workflow. Helm assumes:
+
+- **OpenBSD** on the remote side (uses `rcctl`, `doas`, `acme-client`, `tail -f` — no Linux/systemd/journalctl).
+- **`~/.ssh/config` + loaded `ssh-agent`** as the only auth path. Helm never reads private keys and has no passphrase UI.
+- A small **fleet sized for one human's mental cache** — tens of hosts, not hundreds. No multi-tenant auth, no RBAC, no audit log.
+- The **money pane talks to two CLIs (`stripe-pp-cli`, `mercury-pp-cli`) that ship with the author's private toolkit** — they are not on the public internet. You can wire your own by matching the JSON shape (see [Money pane](#money-pane--pp-clis)). The rest of helm works without them.
+
+The code is permissive-licensed (MIT) and small (~5 KLOC). If you run an OpenBSD fleet of similar shape, fork it; if you're here to read how a single-binary Rust TUI ties ssh + tmux + curl + sqlite together, the source is the docs.
+
 ## Status
 
 v0.1 ships:
@@ -123,6 +143,50 @@ src/
     └── log_tail.rs       scrolling pane that auto-sticks to the latest line
 ```
 
+## Money pane / pp CLIs
+
+The money pane (`m`) does not link directly to Stripe or Mercury — it shells out to two CLIs and parses their JSON. The CLIs helm ships against (`stripe-pp-cli`, `mercury-pp-cli`) are private to the author's toolkit and are **not on the public internet**; the pane gracefully degrades to a "(CLI not found)" message when they are missing, so the rest of helm works fine without them.
+
+If you want to wire your own balance source, make a script with the matching name on `$PATH` that prints the JSON shape helm expects.
+
+`stripe-pp-cli balance` → matches the [Stripe `/v1/balance` response](https://docs.stripe.com/api/balance):
+
+```json
+{
+  "object": "balance",
+  "available": [{"amount": 12345, "currency": "usd"}],
+  "pending":   [{"amount": 678,   "currency": "usd"}]
+}
+```
+
+`mercury-pp-cli accounts` → the [Mercury `/api/v1/accounts` shape](https://docs.mercury.com/reference/get-all-accounts) trimmed to:
+
+```json
+{ "accounts": [
+    { "id": "...", "name": "Operating", "kind": "checking",
+      "currentBalance": 12345.67, "availableBalance": 12000.00,
+      "currency": "USD" }
+]}
+```
+
+Either CLI is responsible for its own auth — helm passes nothing through. The author's CLIs honor `STRIPE_SECRET_KEY` and `MERCURY_BEARER_AUTH` env vars; a one-off wrapper around `curl` + Stripe's REST API will work just as well.
+
+## Driving helm from an AI agent
+
+`helm shell` creates a tmux session on the remote VPS that the operator attaches to in their own terminal. An AI agent (Claude Code, etc.) drives the same session from the side: `helm shell read <alias>` scrapes scrollback, `helm shell send <alias> "<cmd>"` types a line. The operator sees every keystroke land in real time and can intervene at any point — passwords, Ctrl-C, abort.
+
+This is fundamentally different from `helm exec <alias> <cmd>`, which is one-shot and stateless; `helm shell` retains cwd, env, history, and in-progress prompts across calls.
+
+A ready-to-load Claude Code skill is included at [`.claude/skills/helm-shell/SKILL.md`](.claude/skills/helm-shell/SKILL.md). It is agent-agnostic — drop the same prompt rules into any tool-using LLM. The discipline it encodes:
+
+- **Read before send.** Every interaction starts with `helm shell read <alias>` to confirm the pane is at a clean prompt (not mid-command, not in `vim`, not at a password prompt). Blind sends are forbidden.
+- **One logical command at a time.** Send, then read again to verify exit / next prompt before sending more. `helm shell send` only confirms the keystrokes were delivered to tmux — it does not wait for the remote command to finish.
+- **Narrate intent in conversation before sending.** Two sentences max. Gives the operator time to interrupt before keys land.
+- **Refuse to type passwords.** When `read` shows a `password:` or `passphrase:` line, the agent stops and tells the operator. The operator answers in their attached tmux pane.
+- **Use labels for parallel work.** `<alias>:deploy`, `<alias>:logs` — each label is a separate remote tmux session the operator can attach to in its own window.
+
+The skill file documents the four primitives (`open -d`, `read`, `send`, `list`), an `ssh-agent` bridge pattern for sharing the agent socket between operator and assistant Bash invocations, and the read-then-send workflow in detail. Open it for the full guide.
+
 ## Services pane / doas
 
 `rcctl ls started|failed` walks every rc.d service and calls `_rc_check` on each; for services whose pidfile is root-owned (postgres, openresolvd, etc.), `_rc_check` needs root. Helm therefore prefixes `doas -n` so the command fails fast with an explicit authorization error rather than hanging on a password prompt the pane can't answer. Add three lines to `/etc/doas.conf` on each target host:
@@ -153,3 +217,10 @@ In rough order:
 5. ~~Stripe + Mercury overlay (shell out to `stripe-pp-cli`, `mercury-pp-cli`)~~ — done
 6. ~~Logs tail viewer (`l` from browse, built-in + config-driven `tail -f`)~~ — done
 7. ~~SQLite history cache (persists agent + operator runs; rehydrates AgentTail on startup)~~ — done
+8. Runner history pane — keybind that opens a list of past runs from `state.db`, sorted by host/recency, with one-key replay
+9. Per-business Stripe + Mercury linkage — map each `[[businesses]]` to one Stripe account + one Mercury account; render its slice on the business detail panel instead of one fleet-wide block
+10. DNS sanity check — for each business `primary_domain`, resolve A/AAAA + MX + CAA and surface mismatches against the host's known public IP
+11. Postmark stats overlay — per-business send / bounce / spam-complaint counts via Postmark's stats API
+12. BuyVM Stallion panel — same shape as the Vultr pane but against BuyVM's Stallion API
+13. Vultr actions — reboot / stop / start / snapshot from the Vultr pane (with a confirm modal — these are irreversible)
+14. `helm auth` subcommand — one-shot bootstrap that loads the VPS key into `ssh-agent`, verifies fingerprints across all hosts, and exits 0 / non-zero so it can be wired into login shells or doas wrappers
