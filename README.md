@@ -46,8 +46,23 @@ v0.1 ships:
 - Doas / sudo / ssh-passphrase prompts trigger a centered password modal; submitted password is piped to the remote stdin and never persisted
 - `helm shell open <alias>` (CLI subcommand) attaches a terminal to a persistent tmux session on the remote VPS — sessions survive helm restarts and network drops; `helm shell send / read / list / close` drive the same session for scripted or AI-assisted workflows
 
-Not yet wired:
-- `helm auth` bootstrap subcommand
+## `helm auth`
+
+Standalone CLI subcommand for non-TUI use. Reads `config.toml` + `~/.ssh/config`, recomputes the IdentityFile fingerprints helm hosts depend on, and exits with a status that reflects ssh-agent state:
+
+```sh
+helm auth              # exit 0: agent OK; 1: missing/unreachable; 2: arg error
+helm auth --load       # if keys missing, exec `ssh-add <path>` per key (prompts
+                       # for the passphrase), then re-check
+helm auth help         # usage
+```
+
+Wire into login shells or doas wrappers — for example:
+
+```sh
+# ~/.kshrc — load the VPS key on first interactive shell
+helm auth --load >/dev/null 2>&1 || echo "helm: vps keys not loaded"
+```
 
 ## Setup
 
@@ -241,4 +256,4 @@ In rough order:
 11. ~~Postmark stats overlay — per-business send / bounce / spam-complaint counts via Postmark's stats API~~ — done
 12. ~~BuyVM Stallion panel — same shape as the Vultr pane but against BuyVM's Stallion API~~ — done
 13. ~~Vultr actions — reboot / stop / start / snapshot from the Vultr pane (with a confirm modal — these are irreversible)~~ — done
-14. `helm auth` subcommand — one-shot bootstrap that loads the VPS key into `ssh-agent`, verifies fingerprints across all hosts, and exits 0 / non-zero so it can be wired into login shells or doas wrappers
+14. ~~`helm auth` subcommand — one-shot bootstrap that loads the VPS key into `ssh-agent`, verifies fingerprints across all hosts, and exits 0 / non-zero so it can be wired into login shells or doas wrappers~~ — done

@@ -41,6 +41,7 @@ fn main() -> std::process::ExitCode {
         match sub.as_str() {
             "exec" => return run_exec_cli(&argv[2..]),
             "shell" => return run_shell_cli(&argv[2..]),
+            "auth" => return run_auth_cli(&argv[2..]),
             "--help" | "-h" | "help" => {
                 print_help();
                 return std::process::ExitCode::SUCCESS;
@@ -72,7 +73,31 @@ usage:
                                 running TUI (refuses if no TUI is open)
   helm shell <subcommand>       drive a persistent tmux-backed shell session
                                 per VPS (see `helm shell help`)
+  helm auth [--load]            verify ssh-agent has every key helm hosts
+                                depend on; exit 0/non-zero (see `helm auth help`)
   helm help                     this help"
+    );
+}
+
+fn print_auth_help() {
+    eprintln!(
+        "helm auth — verify (and optionally load) ssh-agent keys
+
+Reads your `config.toml` and `~/.ssh/config`, computes the set of
+IdentityFile fingerprints helm hosts depend on, and checks whether
+ssh-agent already holds them. Designed to be wired into login shells or
+doas wrappers via its exit code:
+
+  exit 0  agent reachable and every key is loaded
+  exit 1  one of: agent unreachable, key missing, ssh-add not on PATH
+  exit 2  argument error
+
+usage:
+  helm auth              one-shot check; exit code reflects status
+  helm auth --load       same as bare `helm auth`, plus: when keys are
+                         missing, exec `ssh-add <path>` for each (prompts
+                         for the passphrase) and re-check
+  helm auth help         this help"
     );
 }
 
@@ -256,6 +281,117 @@ fn run_exec_cli(args: &[String]) -> std::process::ExitCode {
     ipc::client::run(&IpcRequest::Exec { alias, cmd })
 }
 
+/// Load ~/.ssh/config according to the cfg's `[ssh_config]` section,
+/// merging the parsed hosts into `cfg` and returning the unmerged list
+/// so the agent check can iterate IdentityFiles. Shared between
+/// `run_tui` and `run_auth_cli`.
+fn load_ssh_hosts_for(cfg: &mut Config) -> Vec<crate::ssh::sshconfig::SshHost> {
+    if !cfg.ssh_config.enabled {
+        return Vec::new();
+    }
+    let path = cfg
+        .ssh_config
+        .path
+        .clone()
+        .or_else(crate::ssh::sshconfig::default_config_path);
+    let Some(p) = path else { return Vec::new() };
+    if !p.exists() {
+        return Vec::new();
+    }
+    match crate::ssh::sshconfig::load_from(&p) {
+        Ok(hs) => {
+            let ssh_hosts = hs.clone();
+            cfg.merge_ssh_hosts(hs);
+            ssh_hosts
+        }
+        Err(e) => {
+            tracing::warn!("ssh config {}: {}", p.display(), e);
+            Vec::new()
+        }
+    }
+}
+
+fn run_auth_cli(args: &[String]) -> std::process::ExitCode {
+    let mut load = false;
+    for a in args {
+        match a.as_str() {
+            "--load" => load = true,
+            "help" | "--help" | "-h" => {
+                print_auth_help();
+                return std::process::ExitCode::SUCCESS;
+            }
+            other => {
+                eprintln!("helm auth: unknown arg `{other}`");
+                print_auth_help();
+                return std::process::ExitCode::from(2);
+            }
+        }
+    }
+
+    let mut cfg = match Config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("helm auth: config load failed: {e}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let ssh_hosts = load_ssh_hosts_for(&mut cfg);
+
+    use crate::ssh::agent::AgentStatus;
+    let status = crate::ssh::agent::check(&ssh_hosts);
+    match &status {
+        AgentStatus::Ok => {
+            eprintln!(
+                "helm auth: ssh-agent OK — {} host(s) verified",
+                ssh_hosts.len()
+            );
+            std::process::ExitCode::SUCCESS
+        }
+        AgentStatus::MissingKeys(missing) if load => {
+            // Interactive: exec `ssh-add <path>` per missing key so the
+            // user can type the passphrase. We inherit stdio so the
+            // prompt lands in the operator's terminal.
+            for m in missing {
+                eprintln!(
+                    "helm auth: loading {} (used by {})…",
+                    m.identity_file.display(),
+                    m.used_by.join(", ")
+                );
+                let st = Command::new("ssh-add")
+                    .arg(&m.identity_file)
+                    .stdin(std::process::Stdio::inherit())
+                    .stdout(std::process::Stdio::inherit())
+                    .stderr(std::process::Stdio::inherit())
+                    .status();
+                if !matches!(st, std::result::Result::Ok(s) if s.success()) {
+                    eprintln!(
+                        "helm auth: ssh-add {} failed",
+                        m.identity_file.display()
+                    );
+                    return std::process::ExitCode::FAILURE;
+                }
+            }
+            // Re-check after the load.
+            match crate::ssh::agent::check(&ssh_hosts) {
+                AgentStatus::Ok => {
+                    eprintln!("helm auth: keys loaded — agent OK");
+                    std::process::ExitCode::SUCCESS
+                }
+                _ => {
+                    eprintln!("helm auth: still missing keys after load");
+                    std::process::ExitCode::FAILURE
+                }
+            }
+        }
+        _ => {
+            if let Some(msg) = crate::ssh::agent::render_blocker(&status, &ssh_hosts) {
+                eprintln!("{msg}");
+            }
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
 fn run_tui() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -263,25 +399,7 @@ fn run_tui() -> Result<()> {
         .init();
 
     let mut cfg = Config::load()?;
-    let mut ssh_hosts = Vec::new();
-    if cfg.ssh_config.enabled {
-        let path = cfg
-            .ssh_config
-            .path
-            .clone()
-            .or_else(crate::ssh::sshconfig::default_config_path);
-        if let Some(p) = path {
-            if p.exists() {
-                match crate::ssh::sshconfig::load_from(&p) {
-                    Ok(hs) => {
-                        ssh_hosts = hs.clone();
-                        cfg.merge_ssh_hosts(hs);
-                    }
-                    Err(e) => tracing::warn!("ssh config {}: {}", p.display(), e),
-                }
-            }
-        }
-    }
+    let ssh_hosts = load_ssh_hosts_for(&mut cfg);
     let agent_status = crate::ssh::agent::check(&ssh_hosts);
     if let Some(msg) = crate::ssh::agent::render_blocker(&agent_status, &ssh_hosts) {
         eprintln!("{msg}");
