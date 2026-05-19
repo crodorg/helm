@@ -118,7 +118,7 @@ Browse:
 - `r` — open runner
 - `s` — services pane
 - `p` — processes pane
-- `h` — health pane
+- `H` — health pane (capital — lowercase `h` is "back" in every other mode, vim-style)
 - `v` — vultr pane (needs `VULTR_API_KEY`)
 - `b` — buyvm pane (needs `BUYVM_API_KEY`; override base via `BUYVM_API_BASE`)
 - `m` — money pane (needs `stripe-pp-cli` + `mercury-pp-cli` auth)

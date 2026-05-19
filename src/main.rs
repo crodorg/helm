@@ -547,6 +547,24 @@ fn handle_key(app: &mut App, code: KeyCode) {
         app.open_help();
         return;
     }
+
+    // `h` doubles as Esc — vim-style "go back" everywhere except Browse
+    // (the root, nothing to back to), input-text contexts, and the
+    // single-key dispatch palettes (where `h` could be a literal
+    // shortcut). Capital `H` retains the health-pane shortcut from
+    // Browse so the keybind isn't lost.
+    let code = if matches!(code, KeyCode::Char('h'))
+        && !matches!(
+            app.mode,
+            Mode::Browse | Mode::Help | Mode::Shortcuts | Mode::LogPicker
+        )
+        && !(app.mode == Mode::Runner && app.runner.focus.is_some())
+    {
+        KeyCode::Esc
+    } else {
+        code
+    };
+
     match app.mode {
         Mode::Browse => handle_browse(app, code),
         Mode::Runner => handle_runner(app, code),
@@ -757,7 +775,7 @@ fn handle_browse(app: &mut App, code: KeyCode) {
         KeyCode::Char('r') => app.open_runner(),
         KeyCode::Char('s') => app.open_services(),
         KeyCode::Char('p') => app.open_processes(),
-        KeyCode::Char('h') => app.open_health(),
+        KeyCode::Char('H') => app.open_health(),
         KeyCode::Char('v') => app.open_vultr(),
         KeyCode::Char('b') => app.open_buyvm(),
         KeyCode::Char('m') => app.open_money(),

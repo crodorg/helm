@@ -67,7 +67,7 @@ const BROWSE: [Binding; 18] = [
     b("F5", "reload config.toml"),
     b("s", "services"),
     b("p", "processes"),
-    b("h", "health"),
+    b("H", "health"),
     b("v", "vultr"),
     b("b", "buyvm"),
     b("m", "money"),
@@ -87,7 +87,7 @@ const RUNNER_PW: [Binding; 2] = [
 
 const RUNNER_CMD: [Binding; 2] = [
     b("enter", "run"),
-    b("esc", "back"),
+    b("h/esc", "back"),
 ];
 
 const RUNNER: [Binding; 7] = [
@@ -96,7 +96,7 @@ const RUNNER: [Binding; 7] = [
     b("g/G", "top/bottom"),
     b("r", "new cmd"),
     b("?", "help"),
-    b("esc", "back"),
+    b("h/esc", "back"),
     b("q", "back"),
 ];
 
@@ -106,7 +106,7 @@ const SERVICES: [Binding; 7] = [
     b("g/G", "top/bottom"),
     b("r", "refresh"),
     b("?", "help"),
-    b("esc", "back"),
+    b("h/esc", "back"),
     b("q", "back"),
 ];
 
@@ -120,7 +120,7 @@ const AGENT_TAIL: [Binding; 5] = [
     b("pgup/pgdn", "page"),
     b("g/G", "top/bottom"),
     b("?", "help"),
-    b("esc", "back"),
+    b("h/esc", "back"),
 ];
 
 const PROCESSES: [Binding; 5] = [
@@ -128,7 +128,7 @@ const PROCESSES: [Binding; 5] = [
     b("pgup/pgdn", "page"),
     b("r", "refresh"),
     b("?", "help"),
-    b("esc", "back"),
+    b("h/esc", "back"),
 ];
 
 const HEALTH: [Binding; 5] = [
@@ -136,7 +136,7 @@ const HEALTH: [Binding; 5] = [
     b("pgup/pgdn", "page"),
     b("r", "refresh"),
     b("?", "help"),
-    b("esc", "back"),
+    b("h/esc", "back"),
 ];
 
 const VULTR: [Binding; 8] = [
@@ -147,7 +147,7 @@ const VULTR: [Binding; 8] = [
     b("N", "snapshot (BILLABLE)"),
     b("r", "refresh"),
     b("?", "help"),
-    b("esc", "back"),
+    b("h/esc", "back"),
 ];
 
 const BUYVM: [Binding; 5] = [
@@ -155,14 +155,14 @@ const BUYVM: [Binding; 5] = [
     b("pgup/pgdn", "page"),
     b("r", "refresh"),
     b("?", "help"),
-    b("esc", "back"),
+    b("h/esc", "back"),
 ];
 
 const MONEY: [Binding; 4] = [
     b("r", "refresh"),
     b("f", "cycle filter (per business)"),
     b("?", "help"),
-    b("esc", "back"),
+    b("h/esc", "back"),
 ];
 
 const LOG_PICKER: [Binding; 2] = [
@@ -175,7 +175,7 @@ const LOG_TAIL: [Binding; 5] = [
     b("pgup/pgdn", "page"),
     b("g/G", "top/bottom"),
     b("?", "help"),
-    b("esc", "kill tail + back"),
+    b("h/esc", "kill tail + back"),
 ];
 
 const HISTORY: [Binding; 5] = [
@@ -183,7 +183,7 @@ const HISTORY: [Binding; 5] = [
     b("enter", "replay (load into runner)"),
     b("r", "refresh"),
     b("?", "help"),
-    b("esc", "back"),
+    b("h/esc", "back"),
 ];
 
 const DNS: [Binding; 5] = [
@@ -191,7 +191,7 @@ const DNS: [Binding; 5] = [
     b("pgup/pgdn", "page"),
     b("r", "refresh"),
     b("?", "help"),
-    b("esc", "back"),
+    b("h/esc", "back"),
 ];
 
 const HELP: [Binding; 3] = [

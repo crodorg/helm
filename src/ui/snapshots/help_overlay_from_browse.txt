@@ -9,7 +9,7 @@
 │               │ [F5]     reload config.toml                  │               │
 │               │ [s]      services                            │               │
 │               │ [p]      processes                           │               │
-│               │ [h]      health                              │               │
+│               │ [H]      health                              │               │
 │               │ [v]      vultr                               │               │
 └───────────────│ [b]      buyvm                               │               │
 ┌ keys (?) ─────│ [m]      money                               │               │

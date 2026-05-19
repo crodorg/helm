@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
 
 use crate::app::{App, InputFocus, OutputLine};
@@ -30,6 +30,8 @@ fn draw_output(f: &mut Frame, area: Rect, app: &App) {
 
     let title = format!("runner › {host}");
     let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
 
     let lines: Vec<Line> = app
         .runner
@@ -50,18 +52,23 @@ fn draw_output(f: &mut Frame, area: Rect, app: &App) {
         })
         .collect();
 
-    // Scroll: ScrollState owns the offset; renderer call to render_start
-    // clamps + auto-detects bottom. Paragraph.scroll wants rows from the
-    // top, so we feed it the start row directly.
-    let inner_h = area.height.saturating_sub(2) as usize;
+    // Window into the line buffer via skip/take. Previously this used
+    // Paragraph with `Wrap { trim: false }` and `.scroll((start, 0))` —
+    // but ratatui's Paragraph counts logical lines for `.scroll()` while
+    // re-wrapping the rest of the buffer, which produced visually
+    // garbled output once you scrolled away from the bottom of a buffer
+    // containing any wrapped (long) lines. Switching to a List keeps
+    // scroll math 1:1 with visual rows at the cost of long-line wrap.
+    let viewport = inner.height as usize;
     let total = lines.len();
-    let start = app.runner.scroll.render_start(total, inner_h);
-
-    let p = Paragraph::new(lines)
-        .block(block)
-        .wrap(Wrap { trim: false })
-        .scroll((start as u16, 0));
-    f.render_widget(p, area);
+    let start = app.runner.scroll.render_start(total, viewport);
+    let visible: Vec<ListItem> = lines
+        .into_iter()
+        .skip(start)
+        .take(viewport)
+        .map(ListItem::new)
+        .collect();
+    f.render_widget(List::new(visible), inner);
 }
 
 fn draw_input(f: &mut Frame, area: Rect, app: &App) {

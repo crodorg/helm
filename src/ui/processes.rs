@@ -71,7 +71,16 @@ fn draw_processes(f: &mut Frame, area: Rect, host_name: &str, s: &crate::app::Pr
     for p in procs {
         lines.push(ListItem::new(format_proc_row(p)));
     }
-    f.render_widget(List::new(lines), inner);
+
+    // Apply scroll offset. Header row stays pinned at the top; data rows
+    // window through [start, start+viewport).
+    let viewport = (inner.height as usize).saturating_sub(1);
+    let data_len = lines.len().saturating_sub(1);
+    let start = s.scroll.render_start(data_len, viewport);
+    let mut visible: Vec<ListItem> = Vec::with_capacity(viewport + 1);
+    visible.push(lines.remove(0));
+    visible.extend(lines.into_iter().skip(start).take(viewport));
+    f.render_widget(List::new(visible), inner);
 }
 
 fn format_proc_row(p: &Process) -> Line<'static> {
