@@ -3,6 +3,7 @@ mod browse;
 mod buyvm;
 mod dns;
 mod health;
+mod help;
 mod history;
 mod log_picker;
 mod log_tail;
@@ -21,7 +22,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::app::{App, InputFocus, Mode};
+use crate::app::{App, Mode};
 
 pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
@@ -58,6 +59,28 @@ pub fn draw(f: &mut Frame, app: &App) {
         Mode::LogTail => log_tail::draw(f, chunks[1], app),
         Mode::History => history::draw(f, chunks[1], app),
         Mode::Dns => dns::draw(f, chunks[1], app),
+        Mode::Help => {
+            // Render the underlying mode beneath, then overlay the help modal.
+            // Re-dispatch by what the user opened it from.
+            match app.help_origin {
+                Some(Mode::Browse) | None => browse::draw(f, chunks[1], app),
+                Some(Mode::Runner) => runner::draw(f, chunks[1], app),
+                Some(Mode::Services) => services::draw(f, chunks[1], app),
+                Some(Mode::Shortcuts) => shortcuts::draw(f, chunks[1], app),
+                Some(Mode::AgentTail) => agent::draw(f, chunks[1], app),
+                Some(Mode::Processes) => processes::draw(f, chunks[1], app),
+                Some(Mode::Health) => health::draw(f, chunks[1], app),
+                Some(Mode::Vultr) => vultr::draw(f, chunks[1], app),
+                Some(Mode::Buyvm) => buyvm::draw(f, chunks[1], app),
+                Some(Mode::Money) => money::draw(f, chunks[1], app),
+                Some(Mode::LogPicker) => log_picker::draw(f, chunks[1], app),
+                Some(Mode::LogTail) => log_tail::draw(f, chunks[1], app),
+                Some(Mode::History) => history::draw(f, chunks[1], app),
+                Some(Mode::Dns) => dns::draw(f, chunks[1], app),
+                Some(Mode::Help) => browse::draw(f, chunks[1], app),
+            }
+            help::draw(f, chunks[1], app);
+        }
     }
     draw_footer(f, chunks[2], app);
 }
@@ -78,6 +101,7 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
         Mode::LogTail => " logs ",
         Mode::History => " history ",
         Mode::Dns => " dns ",
+        Mode::Help => " help ",
     };
     let agent_active = app.agent_active.is_some();
     let agent_chip_bg = if agent_active {
@@ -111,24 +135,8 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
-    let hints = match (app.mode, app.runner.focus) {
-        (Mode::Browse, _) => " [j/k] move   [enter] ssh   [r] run cmd   [s] services   [p] processes   [h] health   [v] vultr   [b] buyvm   [m] money   [l] logs   [t] history   [d] dns   [a] shortcuts   [c] agent tail   [q] quit ",
-        (Mode::Runner, Some(InputFocus::Password)) => " typing password — [enter] submit   [esc] cancel ",
-        (Mode::Runner, Some(InputFocus::Command)) => " typing command — [enter] run   [esc] back ",
-        (Mode::Runner, None) => " [j/k] scroll   [pgup/pgdn] page   [g/G] top/bottom   [r] new cmd   [esc] back ",
-        (Mode::Services, _) => " [j/k] scroll   [pgup/pgdn] page   [g/G] top/bottom   [r] refresh   [esc] back ",
-        (Mode::Shortcuts, _) => " press a shortcut key   [esc] cancel ",
-        (Mode::AgentTail, _) => " [j/k] scroll   [pgup/pgdn] page   [g/G] top/bottom   [esc] back ",
-        (Mode::Processes, _) => " [j/k] scroll   [pgup/pgdn] page   [r] refresh   [esc] back ",
-        (Mode::Health, _) => " [j/k] scroll   [pgup/pgdn] page   [r] refresh   [esc] back ",
-        (Mode::Vultr, _) => " [j/k] select   [R]eboot [H]alt [S]tart   [N] snapshot (BILLABLE)   [r] refresh   [esc] back ",
-        (Mode::Buyvm, _) => " [j/k] scroll   [pgup/pgdn] page   [r] refresh   [esc] back ",
-        (Mode::Money, _) => " [r] refresh   [esc] back ",
-        (Mode::LogPicker, _) => " press a log key   [esc] cancel ",
-        (Mode::LogTail, _) => " [j/k] scroll   [pgup/pgdn] page   [g/G] top/bottom   [esc] kill tail + back ",
-        (Mode::History, _) => " [j/k] move   [enter] replay (loads cmd into runner)   [r] refresh   [esc] back ",
-        (Mode::Dns, _) => " [j/k] scroll   [pgup/pgdn] page   [r] refresh   [esc] back ",
-    };
+    let bindings = crate::help::bindings_for(app.mode, app.runner.focus);
+    let hints = crate::help::format_footer(bindings);
 
     let line = if app.status.is_empty() {
         Line::from(Span::styled(hints, Style::default().fg(Color::DarkGray)))

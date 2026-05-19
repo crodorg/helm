@@ -1,6 +1,7 @@
 mod app;
 mod buyvm;
 mod config;
+mod help;
 mod history;
 mod inventory;
 mod ipc;
@@ -530,6 +531,22 @@ fn run(terminal: &mut Term, app: &mut App) -> Result<()> {
 }
 
 fn handle_key(app: &mut App, code: KeyCode) {
+    // `?` opens the help overlay from any non-text-input mode. Inside
+    // Runner with focus=Password|Command, `?` is a literal character and
+    // must reach the buffer. Shortcuts and LogPicker are single-key
+    // dispatch palettes — letting `?` open another overlay on top of them
+    // is more confusing than helpful, so skip there too. Help itself
+    // closes via `?` (handled in handle_help).
+    if matches!(code, KeyCode::Char('?'))
+        && !matches!(
+            app.mode,
+            Mode::Help | Mode::Shortcuts | Mode::LogPicker
+        )
+        && !(app.mode == Mode::Runner && app.runner.focus.is_some())
+    {
+        app.open_help();
+        return;
+    }
     match app.mode {
         Mode::Browse => handle_browse(app, code),
         Mode::Runner => handle_runner(app, code),
@@ -545,6 +562,16 @@ fn handle_key(app: &mut App, code: KeyCode) {
         Mode::LogTail => handle_log_tail(app, code),
         Mode::History => handle_history(app, code),
         Mode::Dns => handle_dns(app, code),
+        Mode::Help => handle_help(app, code),
+    }
+}
+
+fn handle_help(app: &mut App, code: KeyCode) {
+    if matches!(
+        code,
+        KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q')
+    ) {
+        app.close_help();
     }
 }
 

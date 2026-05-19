@@ -316,6 +316,7 @@ pub enum Mode {
     LogTail,
     History,
     Dns,
+    Help,
 }
 
 pub struct BuyvmState {
@@ -601,6 +602,7 @@ pub struct App {
     pub should_quit: bool,
     pub launch_ssh: Option<String>,
     pub mode: Mode,
+    pub help_origin: Option<Mode>,
     pub runner: RunnerState,
     pub run_handle: Option<RunHandle>,
     pub services: Option<ServicesState>,
@@ -689,6 +691,7 @@ impl App {
             should_quit: false,
             launch_ssh: None,
             mode: Mode::Browse,
+            help_origin: None,
             runner: RunnerState::default(),
             run_handle: None,
             services: None,
@@ -1818,6 +1821,22 @@ impl App {
     pub fn close_shortcuts(&mut self) {
         if self.mode == Mode::Shortcuts {
             self.mode = Mode::Browse;
+        }
+    }
+
+    /// Open the help overlay. Remembers the current mode so `close_help`
+    /// returns to it. No-op when already in Help.
+    pub fn open_help(&mut self) {
+        if self.mode == Mode::Help {
+            return;
+        }
+        self.help_origin = Some(self.mode);
+        self.mode = Mode::Help;
+    }
+
+    pub fn close_help(&mut self) {
+        if self.mode == Mode::Help {
+            self.mode = self.help_origin.take().unwrap_or(Mode::Browse);
         }
     }
 
