@@ -193,15 +193,29 @@ fn push_money_lines(v: &mut Vec<Line<'static>>, b: &crate::config::Business, app
         v.push(money_line("mercury", &label, Color::Green));
     }
     if let Some(id) = b.stripe_account_id.as_ref() {
-        let stripe_status = match (&cache.stripe, &cache.stripe_error) {
-            (Some(s), _) => format!(
-                "linked {id} — fleet ${:.2} avail (Connect per-account view TBD)",
-                s.available_cents as f64 / 100.0
-            ),
-            (_, Some(e)) => format!("linked {id} — fleet fetch error: {e}"),
-            _ => format!("linked {id} — fleet snapshot pending"),
+        let stripe_status = if let Some(s) = cache.stripe_for_connect(id) {
+            let cur = s.currency.to_uppercase();
+            format!(
+                "{id} — avail {} pending {}  total {}",
+                fmt_amount(s.available_cents, &cur),
+                fmt_amount(s.pending_cents, &cur),
+                fmt_amount(s.available_cents + s.pending_cents, &cur),
+            )
+        } else if let Some(e) = cache.stripe_error_for_connect(id) {
+            format!("{id} — fetch error: {e}")
+        } else {
+            format!("{id} — (fetching…)")
         };
         v.push(money_line("stripe", &stripe_status, Color::Magenta));
+    }
+}
+
+fn fmt_amount(cents: i64, currency: &str) -> String {
+    let dollars = cents as f64 / 100.0;
+    if currency == "USD" {
+        format!("${:.2}", dollars)
+    } else {
+        format!("{:.2} {}", dollars, currency)
     }
 }
 

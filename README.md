@@ -271,7 +271,7 @@ In rough order:
 13. ~~Vultr actions — reboot / stop / start / snapshot from the Vultr pane (with a confirm modal — these are irreversible)~~ — done
 14. ~~`helm auth` subcommand — one-shot bootstrap that loads the VPS key into `ssh-agent`, verifies fingerprints across all hosts, and exits 0 / non-zero so it can be wired into login shells or doas wrappers~~ — done
 15. ~~In-TUI help menu — `?` from any mode opens a modal palette listing every key binding for the current pane (fzf-style)~~ — done
-16. Per-Connect Stripe balance — extend `stripe-pp-cli` shell-out with `--stripe-account acct_…` so each business's detail line shows its own slice instead of the fleet-wide total
+16. ~~Per-Connect Stripe balance — extend `stripe-pp-cli` shell-out with `--stripe-account acct_…` so each business's detail line shows its own slice instead of the fleet-wide total~~ — done
 17. TUI snapshot tests — render ratatui buffers into strings, diff against fixtures; catches UI regressions without manual smoke
 18. Refresh-all key — single keypress that re-fires vultr + buyvm + money + postmark + dns + health together (currently 6 separate `r` presses across panes)
 19. Money pane: per-business filter — `f` to filter Mercury rows by the configured `mercury_account_id` mapping

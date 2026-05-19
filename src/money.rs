@@ -10,6 +10,7 @@
 //! its auth is unset, the corresponding panel renders an error string
 //! rather than blocking startup.
 
+use std::collections::HashMap;
 use std::process::Command;
 use std::sync::mpsc::{channel, Receiver};
 use std::thread;
@@ -43,6 +44,11 @@ pub struct MercuryAccount {
 pub struct MoneyCache {
     pub stripe: Option<StripeSnapshot>,
     pub stripe_error: Option<String>,
+    /// Per-Connect-account balances, keyed by Stripe acct id. Populated
+    /// when a business has `stripe_account_id` set and the per-Connect
+    /// fetch (`--stripe-account acct_…`) succeeded.
+    pub stripe_connect: HashMap<String, StripeSnapshot>,
+    pub stripe_connect_errors: HashMap<String, String>,
     pub mercury: Vec<MercuryAccount>,
     pub mercury_error: Option<String>,
 }
@@ -52,6 +58,14 @@ impl MoneyCache {
     /// linkage rendering in the Browse detail panel.
     pub fn mercury_for_id(&self, id: &str) -> Option<&MercuryAccount> {
         self.mercury.iter().find(|a| a.id == id)
+    }
+
+    pub fn stripe_for_connect(&self, account_id: &str) -> Option<&StripeSnapshot> {
+        self.stripe_connect.get(account_id)
+    }
+
+    pub fn stripe_error_for_connect(&self, account_id: &str) -> Option<&str> {
+        self.stripe_connect_errors.get(account_id).map(String::as_str)
     }
 
     pub fn mercury_total(&self, field: BalanceField) -> Option<f64> {
@@ -76,10 +90,13 @@ pub enum BalanceField {
     Available,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MoneySlot {
     Stripe,
     Mercury,
+    /// Per-Connect-account Stripe balance. Carries the acct id so the
+    /// ingest side can route the response into the right cache slot.
+    StripeConnect(String),
 }
 
 #[derive(Debug)]
@@ -88,12 +105,14 @@ pub struct MoneyResult {
     pub output: Result<String, String>,
 }
 
-/// Fire two parallel CLI calls. Each thread sends a single `MoneyResult`.
-/// Caller drains via `try_recv` from the main loop.
-pub fn spawn_money_fetch() -> Receiver<MoneyResult> {
+/// Fire parallel CLI calls: one for the platform Stripe balance, one for
+/// Mercury, and one extra per Connect-account id (Stripe `--stripe-account
+/// acct_…`). Each thread sends a single `MoneyResult`. Caller drains via
+/// `try_recv` from the main loop.
+pub fn spawn_money_fetch(connect_accounts: &[String]) -> Receiver<MoneyResult> {
     let (tx, rx) = channel();
 
-    // Stripe: balance is the default account's available/pending split.
+    // Stripe: balance is the platform account's available/pending split.
     let tx_s = tx.clone();
     thread::spawn(move || {
         let result = shell_json("stripe-pp-cli", &["balance"]);
@@ -102,6 +121,22 @@ pub fn spawn_money_fetch() -> Receiver<MoneyResult> {
             output: result,
         });
     });
+
+    // One thread per Connect account: `stripe-pp-cli balance --stripe-account acct_…`.
+    for acct_id in connect_accounts {
+        let acct = acct_id.clone();
+        let tx_c = tx.clone();
+        thread::spawn(move || {
+            let result = shell_json(
+                "stripe-pp-cli",
+                &["balance", "--stripe-account", acct.as_str()],
+            );
+            let _ = tx_c.send(MoneyResult {
+                slot: MoneySlot::StripeConnect(acct),
+                output: result,
+            });
+        });
+    }
 
     // Mercury: list every account on the configured organization.
     let tx_m = tx;
@@ -380,5 +415,27 @@ mod tests {
     fn shorten_err_returns_first_non_blank() {
         assert_eq!(shorten_err(""), "");
         assert_eq!(shorten_err("\n\n  Error: nope  \nhint: ..."), "Error: nope");
+    }
+
+    #[test]
+    fn stripe_for_connect_routes_by_acct_id() {
+        let mut cache = MoneyCache::default();
+        cache.stripe_connect.insert(
+            "acct_alpha".into(),
+            StripeSnapshot {
+                available_cents: 100,
+                pending_cents: 25,
+                currency: "usd".into(),
+            },
+        );
+        cache.stripe_connect_errors.insert("acct_beta".into(), "401".into());
+
+        assert!(cache.stripe_for_connect("acct_alpha").is_some());
+        assert_eq!(cache.stripe_for_connect("acct_alpha").unwrap().available_cents, 100);
+        assert!(cache.stripe_for_connect("acct_beta").is_none());
+        assert!(cache.stripe_for_connect("acct_missing").is_none());
+
+        assert_eq!(cache.stripe_error_for_connect("acct_beta"), Some("401"));
+        assert!(cache.stripe_error_for_connect("acct_alpha").is_none());
     }
 }

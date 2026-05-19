@@ -400,18 +400,29 @@ pub struct MoneyState {
     pub rx: Receiver<MoneyResult>,
     pub stripe_raw: Option<Result<String, String>>,
     pub mercury_raw: Option<Result<String, String>>,
+    /// Per-Connect-account raw responses, keyed by acct id. Sized
+    /// against `expected_connect_ids` at construction.
+    pub connect_raw: std::collections::HashMap<String, Result<String, String>>,
+    /// Acct ids we expect responses for. `all_filled` cross-checks
+    /// `connect_raw`'s length against this list.
+    pub expected_connect_ids: Vec<String>,
 }
 
 impl MoneyState {
-    fn slot_mut(&mut self, s: MoneySlot) -> &mut Option<Result<String, String>> {
-        match s {
-            MoneySlot::Stripe => &mut self.stripe_raw,
-            MoneySlot::Mercury => &mut self.mercury_raw,
+    fn record(&mut self, slot: MoneySlot, payload: Result<String, String>) {
+        match slot {
+            MoneySlot::Stripe => self.stripe_raw = Some(payload),
+            MoneySlot::Mercury => self.mercury_raw = Some(payload),
+            MoneySlot::StripeConnect(acct) => {
+                self.connect_raw.insert(acct, payload);
+            }
         }
     }
 
     fn all_filled(&self) -> bool {
-        self.stripe_raw.is_some() && self.mercury_raw.is_some()
+        self.stripe_raw.is_some()
+            && self.mercury_raw.is_some()
+            && self.connect_raw.len() >= self.expected_connect_ids.len()
     }
 }
 
@@ -1430,12 +1441,31 @@ impl App {
     /// Replaces any in-flight state (refresh is idempotent).
     pub fn start_money_fetch(&mut self) {
         self.money_fetch_attempted = true;
-        let rx = money::spawn_money_fetch();
+        let connect_ids = self.connect_account_ids();
+        let rx = money::spawn_money_fetch(&connect_ids);
         self.money_pane = Some(MoneyState {
             rx,
             stripe_raw: None,
             mercury_raw: None,
+            connect_raw: std::collections::HashMap::new(),
+            expected_connect_ids: connect_ids,
         });
+    }
+
+    /// Distinct, non-empty Stripe Connect account ids declared by any
+    /// business. Preserves first-seen order so threads spawn deterministically.
+    fn connect_account_ids(&self) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for b in &self.config.businesses {
+            if let Some(id) = b.stripe_account_id.as_ref() {
+                let t = id.trim();
+                if !t.is_empty() && seen.insert(t.to_string()) {
+                    out.push(t.to_string());
+                }
+            }
+        }
+        out
     }
 
     pub fn ingest_money_events(&mut self) {
@@ -1444,7 +1474,7 @@ impl App {
                 return;
             };
             while let Ok(res) = s.rx.try_recv() {
-                *s.slot_mut(res.slot) = Some(res.output);
+                s.record(res.slot, res.output);
             }
             s.all_filled()
         };
@@ -1454,6 +1484,7 @@ impl App {
         let state = self.money_pane.take().unwrap();
         let stripe_raw = state.stripe_raw.unwrap();
         let mercury_raw = state.mercury_raw.unwrap();
+        let connect_raw = state.connect_raw;
 
         let mut cache = MoneyCache::default();
         match stripe_raw {
@@ -1462,6 +1493,21 @@ impl App {
                 Err(e) => cache.stripe_error = Some(e),
             },
             Err(e) => cache.stripe_error = Some(e),
+        }
+        for (acct_id, raw) in connect_raw {
+            match raw {
+                Ok(body) => match money::parse_stripe_balance(&body) {
+                    Ok(s) => {
+                        cache.stripe_connect.insert(acct_id, s);
+                    }
+                    Err(e) => {
+                        cache.stripe_connect_errors.insert(acct_id, e);
+                    }
+                },
+                Err(e) => {
+                    cache.stripe_connect_errors.insert(acct_id, e);
+                }
+            }
         }
         match mercury_raw {
             Ok(body) => match money::parse_mercury_accounts(&body) {

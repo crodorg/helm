@@ -10,9 +10,17 @@ use crate::app::App;
 use crate::money::{BalanceField, MercuryAccount, MoneyCache, StripeSnapshot};
 
 pub fn draw(f: &mut Frame, area: Rect, app: &App) {
+    let connect_rows = app
+        .money_cache
+        .as_ref()
+        .map(|c| c.stripe_connect.len() + c.stripe_connect_errors.len())
+        .unwrap_or(0) as u16;
+    // 6 = 2 border + 3 platform rows + 1 spacer; +1 per Connect line.
+    // Cap stripe block at 2/3 of pane so Mercury always has room.
+    let stripe_h = (6 + connect_rows).min(area.height.saturating_mul(2) / 3).max(6);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(6), Constraint::Min(0)])
+        .constraints([Constraint::Length(stripe_h), Constraint::Min(0)])
         .split(area);
 
     draw_stripe(f, chunks[0], app);
@@ -60,17 +68,45 @@ fn draw_stripe(f: &mut Frame, area: Rect, app: &App) {
         return;
     };
 
-    let p = Paragraph::new(stripe_lines(s));
+    let mut lines = stripe_lines(s);
+    // Per-Connect rows: sort by acct id for stable rendering.
+    if !cache.stripe_connect.is_empty() || !cache.stripe_connect_errors.is_empty() {
+        lines.push(Line::from(""));
+        let mut accts: Vec<&String> = cache
+            .stripe_connect
+            .keys()
+            .chain(cache.stripe_connect_errors.keys())
+            .collect();
+        accts.sort();
+        accts.dedup();
+        for acct in accts {
+            if let Some(snap) = cache.stripe_connect.get(acct) {
+                let cur = snap.currency.to_uppercase();
+                lines.push(kv(
+                    acct,
+                    &format!(
+                        "avail {} pending {}",
+                        format_amount(snap.available_cents, &cur),
+                        format_amount(snap.pending_cents, &cur),
+                    ),
+                    Color::Magenta,
+                ));
+            } else if let Some(err) = cache.stripe_connect_errors.get(acct) {
+                lines.push(kv(acct, &format!("error: {err}"), Color::Red));
+            }
+        }
+    }
+    let p = Paragraph::new(lines);
     f.render_widget(p, inner);
 }
 
 fn stripe_lines(s: &StripeSnapshot) -> Vec<Line<'static>> {
     let cur = s.currency.to_uppercase();
     vec![
-        kv("available", &format_amount(s.available_cents, &cur), Color::Green),
-        kv("pending  ", &format_amount(s.pending_cents, &cur), Color::Yellow),
+        kv("available (platform)", &format_amount(s.available_cents, &cur), Color::Green),
+        kv("pending   (platform)", &format_amount(s.pending_cents, &cur), Color::Yellow),
         kv(
-            "total    ",
+            "total     (platform)",
             &format_amount(s.available_cents + s.pending_cents, &cur),
             Color::White,
         ),
