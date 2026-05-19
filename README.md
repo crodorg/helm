@@ -74,7 +74,19 @@ ssh-add ~/.ssh/id_ed25519        # if not already loaded
 ./target/release/helm
 ```
 
-`config.toml` is loaded from the current working directory first, then `$XDG_CONFIG_HOME/helm/config.toml`. It is gitignored.
+`config.toml` is loaded from the current working directory first, then `$XDG_CONFIG_HOME/helm/config.toml` (e.g. `~/.config/helm/config.toml`). It is gitignored.
+
+### Putting `helm` on your `$PATH`
+
+If you build from source in a checkout outside your `$PATH` (e.g. `~/.local/src/helm`), symlink the release binary into a bin dir you already have on `$PATH`:
+
+```sh
+ln -s ~/.local/src/helm/target/release/helm ~/dotfiles/bin/helm
+```
+
+Rebuilds (`cargo build --release`) update the symlink target in place — no re-copy needed. Drop your `config.toml` once into `~/.config/helm/config.toml` and `helm` works from any cwd.
+
+Alternative: `cargo install --path .` copies the binary to `~/.cargo/bin/helm`, but you must re-run it after every rebuild.
 
 ## SSH expectations
 
