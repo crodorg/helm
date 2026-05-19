@@ -632,6 +632,7 @@ fn handle_money(app: &mut App, code: KeyCode) {
     match code {
         KeyCode::Esc => app.close_money(),
         KeyCode::Char('r') => app.refresh_money(),
+        KeyCode::Char('f') => app.cycle_money_filter(),
         _ => {}
     }
 }

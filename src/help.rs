@@ -170,8 +170,9 @@ const BUYVM: [Binding; 5] = [
     b("esc", "back"),
 ];
 
-const MONEY: [Binding; 3] = [
+const MONEY: [Binding; 4] = [
     b("r", "refresh"),
+    b("f", "cycle filter (per business)"),
     b("?", "help"),
     b("esc", "back"),
 ];

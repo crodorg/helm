@@ -614,6 +614,10 @@ pub struct App {
     pub launch_ssh: Option<String>,
     pub mode: Mode,
     pub help_origin: Option<Mode>,
+    /// Money pane filter. `None` = all rows; `Some(idx)` = show only
+    /// rows belonging to `money_filtered_businesses()[idx]`. Cycled via
+    /// `f` in the money pane.
+    pub money_filter: Option<usize>,
     pub runner: RunnerState,
     pub run_handle: Option<RunHandle>,
     pub services: Option<ServicesState>,
@@ -703,6 +707,7 @@ impl App {
             launch_ssh: None,
             mode: Mode::Browse,
             help_origin: None,
+            money_filter: None,
             runner: RunnerState::default(),
             run_handle: None,
             services: None,
@@ -1689,6 +1694,46 @@ impl App {
         }
     }
 
+    /// Businesses with at least one money linkage (Mercury or Stripe
+    /// Connect). Cycled via `f` in the money pane.
+    pub fn money_filtered_businesses(&self) -> Vec<&crate::config::Business> {
+        self.config
+            .businesses
+            .iter()
+            .filter(|b| {
+                b.mercury_account_id
+                    .as_deref()
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false)
+                    || b.stripe_account_id
+                        .as_deref()
+                        .map(|s| !s.trim().is_empty())
+                        .unwrap_or(false)
+            })
+            .collect()
+    }
+
+    /// Advance money filter: None → 0 → 1 → … → N-1 → None. No-op when
+    /// there are no eligible businesses.
+    pub fn cycle_money_filter(&mut self) {
+        let count = self.money_filtered_businesses().len();
+        if count == 0 {
+            self.status = "no businesses have a stripe/mercury linkage".into();
+            return;
+        }
+        self.money_filter = match self.money_filter {
+            None => Some(0),
+            Some(i) if i + 1 < count => Some(i + 1),
+            Some(_) => None,
+        };
+    }
+
+    /// The business the money filter is currently pinned to, if any.
+    pub fn money_filter_business(&self) -> Option<&crate::config::Business> {
+        let idx = self.money_filter?;
+        self.money_filtered_businesses().into_iter().nth(idx)
+    }
+
     /// Open the history pane. Loads up to 200 most-recent runs (both
     /// sources) from the SQLite store. If history is unattached the pane
     /// still opens but renders an empty-state error.
@@ -2078,5 +2123,72 @@ impl App {
         self.runner.current_cmd = None;
         self.runner.current_started_at = None;
         self.runner.current_started_at_unix = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Business;
+
+    fn biz(name: &str, stripe: Option<&str>, mercury: Option<&str>) -> Business {
+        Business {
+            name: name.into(),
+            primary_domain: String::new(),
+            host: String::new(),
+            repo_path: String::new(),
+            deploy_cmd: String::new(),
+            notes: String::new(),
+            stripe_account_id: stripe.map(String::from),
+            mercury_account_id: mercury.map(String::from),
+            postmark_server_token: None,
+        }
+    }
+
+    fn app_with_businesses(bs: Vec<Business>) -> App {
+        let cfg = Config {
+            businesses: bs,
+            ..Default::default()
+        };
+        App::new(cfg)
+    }
+
+    #[test]
+    fn money_filter_skips_businesses_with_no_linkages() {
+        let app = app_with_businesses(vec![
+            biz("alpha", None, None),
+            biz("beta", Some("acct_1"), None),
+            biz("gamma", None, Some("acc-1")),
+            biz("delta", None, None),
+        ]);
+        let eligible: Vec<&str> = app
+            .money_filtered_businesses()
+            .iter()
+            .map(|b| b.name.as_str())
+            .collect();
+        assert_eq!(eligible, vec!["beta", "gamma"]);
+    }
+
+    #[test]
+    fn cycle_money_filter_walks_eligible_then_wraps_to_none() {
+        let mut app = app_with_businesses(vec![
+            biz("alpha", Some("acct_1"), None),
+            biz("beta", None, Some("acc-1")),
+        ]);
+        assert_eq!(app.money_filter, None);
+        app.cycle_money_filter();
+        assert_eq!(app.money_filter_business().map(|b| b.name.as_str()), Some("alpha"));
+        app.cycle_money_filter();
+        assert_eq!(app.money_filter_business().map(|b| b.name.as_str()), Some("beta"));
+        app.cycle_money_filter();
+        assert_eq!(app.money_filter, None);
+    }
+
+    #[test]
+    fn cycle_money_filter_no_op_when_no_eligible() {
+        let mut app = app_with_businesses(vec![biz("alpha", None, None)]);
+        app.cycle_money_filter();
+        assert_eq!(app.money_filter, None);
+        assert!(!app.status.is_empty());
     }
 }

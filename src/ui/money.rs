@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::app::App;
-use crate::money::{BalanceField, MercuryAccount, MoneyCache, StripeSnapshot};
+use crate::money::{MercuryAccount, StripeSnapshot};
 
 pub fn draw(f: &mut Frame, area: Rect, app: &App) {
     let connect_rows = app
@@ -20,11 +20,31 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
     let stripe_h = (6 + connect_rows).min(area.height.saturating_mul(2) / 3).max(6);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(stripe_h), Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(stripe_h),
+            Constraint::Min(0),
+        ])
         .split(area);
 
-    draw_stripe(f, chunks[0], app);
-    draw_mercury(f, chunks[1], app);
+    draw_filter_banner(f, chunks[0], app);
+    draw_stripe(f, chunks[1], app);
+    draw_mercury(f, chunks[2], app);
+}
+
+fn draw_filter_banner(f: &mut Frame, area: Rect, app: &App) {
+    let label = match app.money_filter_business() {
+        Some(b) => format!("filter › {} (press f to cycle)", b.name),
+        None => "filter › ALL businesses (press f to cycle)".to_string(),
+    };
+    let p = Paragraph::new(Line::from(Span::styled(
+        format!(" {label} "),
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    )));
+    f.render_widget(p, area);
 }
 
 fn draw_stripe(f: &mut Frame, area: Rect, app: &App) {
@@ -69,16 +89,28 @@ fn draw_stripe(f: &mut Frame, area: Rect, app: &App) {
     };
 
     let mut lines = stripe_lines(s);
-    // Per-Connect rows: sort by acct id for stable rendering.
+    // Per-Connect rows: sort by acct id for stable rendering. When a
+    // money filter is active, narrow to just that business's
+    // stripe_account_id (if it has one).
+    let filter_acct: Option<&str> = app
+        .money_filter_business()
+        .and_then(|b| b.stripe_account_id.as_deref());
     if !cache.stripe_connect.is_empty() || !cache.stripe_connect_errors.is_empty() {
         lines.push(Line::from(""));
         let mut accts: Vec<&String> = cache
             .stripe_connect
             .keys()
             .chain(cache.stripe_connect_errors.keys())
+            .filter(|acct| filter_acct.is_none_or(|want| want == acct.as_str()))
             .collect();
         accts.sort();
         accts.dedup();
+        if accts.is_empty() && filter_acct.is_some() {
+            lines.push(Line::from(Span::styled(
+                "(no Stripe Connect data for this business)",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
         for acct in accts {
             if let Some(snap) = cache.stripe_connect.get(acct) {
                 let cur = snap.currency.to_uppercase();
@@ -154,14 +186,34 @@ fn draw_mercury(f: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
+    // Optional per-business filter — narrows to a single Mercury row.
+    let filter_id: Option<&str> = app
+        .money_filter_business()
+        .and_then(|b| b.mercury_account_id.as_deref());
+    let visible: Vec<&MercuryAccount> = cache
+        .mercury
+        .iter()
+        .filter(|a| filter_id.is_none_or(|want| want == a.id.as_str()))
+        .collect();
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
         .split(inner);
 
     draw_mercury_header(f, chunks[0]);
-    draw_mercury_body(f, chunks[1], &cache.mercury);
-    draw_mercury_total(f, chunks[2], cache);
+    if visible.is_empty() {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "(no Mercury account for this business)",
+                Style::default().fg(Color::DarkGray),
+            ))),
+            chunks[1],
+        );
+    } else {
+        draw_mercury_body(f, chunks[1], &visible);
+    }
+    draw_mercury_total(f, chunks[2], &visible);
 }
 
 fn draw_mercury_header(f: &mut Frame, area: Rect) {
@@ -179,16 +231,15 @@ fn draw_mercury_header(f: &mut Frame, area: Rect) {
     f.render_widget(Paragraph::new(line), area);
 }
 
-fn draw_mercury_body(f: &mut Frame, area: Rect, accounts: &[MercuryAccount]) {
-    let items: Vec<ListItem> = accounts.iter().map(account_row).collect();
+fn draw_mercury_body(f: &mut Frame, area: Rect, accounts: &[&MercuryAccount]) {
+    let items: Vec<ListItem> = accounts.iter().map(|a| account_row(a)).collect();
     f.render_widget(List::new(items), area);
 }
 
-fn draw_mercury_total(f: &mut Frame, area: Rect, cache: &MoneyCache) {
-    let current = cache.mercury_total(BalanceField::Current).unwrap_or(0.0);
-    let avail = cache.mercury_total(BalanceField::Available).unwrap_or(0.0);
-    let ccy = cache
-        .mercury
+fn draw_mercury_total(f: &mut Frame, area: Rect, accounts: &[&MercuryAccount]) {
+    let current: f64 = accounts.iter().map(|a| a.current_balance).sum();
+    let avail: f64 = accounts.iter().map(|a| a.available_balance).sum();
+    let ccy = accounts
         .first()
         .map(|a| a.currency.clone())
         .unwrap_or_else(|| "USD".into());

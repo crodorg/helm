@@ -282,6 +282,6 @@ In rough order:
 16. ~~Per-Connect Stripe balance — extend `stripe-pp-cli` shell-out with `--stripe-account acct_…` so each business's detail line shows its own slice instead of the fleet-wide total~~ — done
 17. ~~TUI snapshot tests — render ratatui buffers into strings, diff against fixtures; catches UI regressions without manual smoke~~ — done
 18. ~~Refresh-all key — single keypress that re-fires vultr + buyvm + money + postmark + dns + health together (currently 6 separate `r` presses across panes)~~ — done (`R` from Browse)
-19. Money pane: per-business filter — `f` to filter Mercury rows by the configured `mercury_account_id` mapping
+19. ~~Money pane: per-business filter — `f` to filter Mercury rows by the configured `mercury_account_id` mapping~~ — done (`f` cycles through eligible businesses; narrows both Mercury and Stripe Connect rows)
 20. Vultr action toast — render action results inline in the `v` pane instead of the global status line so context is preserved
 21. Runtime config reload — `R` from Browse re-reads `config.toml` without quitting helm

@@ -68,26 +68,6 @@ impl MoneyCache {
         self.stripe_connect_errors.get(account_id).map(String::as_str)
     }
 
-    pub fn mercury_total(&self, field: BalanceField) -> Option<f64> {
-        if self.mercury.is_empty() {
-            return None;
-        }
-        let total: f64 = self
-            .mercury
-            .iter()
-            .map(|a| match field {
-                BalanceField::Current => a.current_balance,
-                BalanceField::Available => a.available_balance,
-            })
-            .sum();
-        Some(total)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum BalanceField {
-    Current,
-    Available,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -380,22 +360,6 @@ mod tests {
     fn rejects_malformed_mercury_accounts() {
         assert!(parse_mercury_accounts("not json").is_err());
         assert!(parse_mercury_accounts(r#"{"accounts": "oops"}"#).is_err());
-    }
-
-    #[test]
-    fn mercury_totals_sum_per_field() {
-        let cache = MoneyCache {
-            mercury: parse_mercury_accounts(MERCURY_ACCOUNTS_FIXTURE).unwrap(),
-            ..Default::default()
-        };
-        assert_eq!(cache.mercury_total(BalanceField::Current), Some(62345.67));
-        assert_eq!(cache.mercury_total(BalanceField::Available), Some(62000.00));
-    }
-
-    #[test]
-    fn mercury_totals_none_when_empty() {
-        let cache = MoneyCache::default();
-        assert_eq!(cache.mercury_total(BalanceField::Current), None);
     }
 
     #[test]

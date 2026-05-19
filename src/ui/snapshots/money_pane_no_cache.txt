@@ -1,4 +1,5 @@
  helm    money    🤖  idle (0)
+ filter › ALL businesses (press f to cycle)
 ┌stripe────────────────────────────────────────────────────────────────────────┐
 │(press r to fetch)                                                            │
 │                                                                              │
@@ -11,6 +12,5 @@
 │                                                                              │
 │                                                                              │
 │                                                                              │
-│                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
- [r] refresh   [?] help   [esc] back
+ [r] refresh   [f] cycle filter (per business)   [?] help   [esc] back
