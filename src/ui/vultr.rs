@@ -76,17 +76,81 @@ fn draw_body(f: &mut Frame, area: Rect, app: &App, cache: &VultrCache) {
     let all_items: Vec<ListItem> = cache
         .instances
         .iter()
-        .map(|inst| instance_row(inst, cache.cost_for(&inst.plan)))
+        .enumerate()
+        .map(|(idx, inst)| {
+            instance_row(inst, cache.cost_for(&inst.plan), idx == app.vultr_selected)
+        })
         .collect();
     let total = all_items.len();
     let viewport = area.height as usize;
+    // Keep the selected row visible as the user moves through the list.
+    app.vultr_scroll
+        .ensure_visible(app.vultr_selected, total, viewport);
     let start = app.vultr_scroll.render_start(total, viewport);
     let end = (start + viewport).min(total);
     let visible: Vec<ListItem> = all_items.into_iter().skip(start).take(end - start).collect();
     f.render_widget(List::new(visible), area);
+
+    // Overlay the confirm modal on top of the body when a request is pending.
+    if let Some(confirm) = app.vultr_confirm.as_ref() {
+        draw_confirm_modal(f, area, confirm);
+    }
 }
 
-fn instance_row<'a>(inst: &Instance, cost: Option<f32>) -> ListItem<'a> {
+fn draw_confirm_modal(f: &mut Frame, area: Rect, confirm: &crate::app::VultrConfirm) {
+    // Centered 60% × 30% box.
+    let w = (area.width * 6 / 10).max(40);
+    let h = 7;
+    let x = area.x + area.width.saturating_sub(w) / 2;
+    let y = area.y + area.height.saturating_sub(h) / 2;
+    let modal_area = Rect { x, y, width: w, height: h };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" confirm vultr action ")
+        .border_style(Style::default().fg(Color::Yellow));
+    let inner = block.inner(modal_area);
+    // Wipe behind the modal so the table doesn't bleed through.
+    f.render_widget(ratatui::widgets::Clear, modal_area);
+    f.render_widget(block, modal_area);
+
+    let lines = vec![
+        ratatui::text::Line::from(vec![
+            Span::raw("action: "),
+            Span::styled(
+                confirm.action.label(),
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        ratatui::text::Line::from(vec![
+            Span::raw("target: "),
+            Span::styled(
+                confirm.label.clone(),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  ({})", confirm.instance_id),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
+        ratatui::text::Line::from(""),
+        ratatui::text::Line::from(vec![
+            Span::styled(
+                "[y]",
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" confirm   "),
+            Span::styled(
+                "[n/esc]",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" cancel"),
+        ]),
+    ];
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+fn instance_row<'a>(inst: &Instance, cost: Option<f32>, selected: bool) -> ListItem<'a> {
     let label_cell = format!("{:<14}", truncate(&inst.label, 14));
     let region_cell = format!("{:<6}", truncate(&inst.region, 6));
     let plan_cell = format!("{:<14}", truncate(&inst.plan, 14));
@@ -109,26 +173,32 @@ fn instance_row<'a>(inst: &Instance, cost: Option<f32>) -> ListItem<'a> {
         Color::Red
     };
 
+    let base = if selected {
+        Style::default().bg(Color::DarkGray)
+    } else {
+        Style::default()
+    };
+
     ListItem::new(Line::from(vec![
-        Span::raw(label_cell),
-        Span::raw("  "),
-        Span::raw(region_cell),
-        Span::raw("  "),
-        Span::raw(plan_cell),
-        Span::raw("  "),
-        Span::raw(cost_cell),
-        Span::raw("  "),
+        Span::styled(label_cell, base),
+        Span::styled("  ".to_string(), base),
+        Span::styled(region_cell, base),
+        Span::styled("  ".to_string(), base),
+        Span::styled(plan_cell, base),
+        Span::styled("  ".to_string(), base),
+        Span::styled(cost_cell, base),
+        Span::styled("  ".to_string(), base),
         Span::styled(
             status_cell,
-            Style::default().fg(status_color).add_modifier(Modifier::BOLD),
+            base.fg(status_color).add_modifier(Modifier::BOLD),
         ),
-        Span::raw("  "),
+        Span::styled("  ".to_string(), base),
         Span::styled(
             power_cell,
-            Style::default().fg(power_color).add_modifier(Modifier::BOLD),
+            base.fg(power_color).add_modifier(Modifier::BOLD),
         ),
-        Span::raw("  "),
-        Span::raw(ip_cell),
+        Span::styled("  ".to_string(), base),
+        Span::styled(ip_cell, base),
     ]))
 }
 

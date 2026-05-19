@@ -140,6 +140,97 @@ pub fn spawn_vultr_fetch(api_key: String) -> Receiver<VultrResult> {
     rx
 }
 
+/// Vultr lifecycle actions. Mapping to API endpoints lives in
+/// `ActionKind::endpoint_path` + `ActionKind::body_for`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActionKind {
+    Reboot,
+    Halt,
+    Start,
+    Snapshot,
+}
+
+impl ActionKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            ActionKind::Reboot => "reboot",
+            ActionKind::Halt => "halt (power off)",
+            ActionKind::Start => "start (power on)",
+            ActionKind::Snapshot => "snapshot",
+        }
+    }
+
+    /// Path appended to `https://api.vultr.com` for this action.
+    pub fn endpoint_path(self, instance_id: &str) -> String {
+        match self {
+            ActionKind::Reboot => format!("/v2/instances/{instance_id}/reboot"),
+            ActionKind::Halt => format!("/v2/instances/{instance_id}/halt"),
+            ActionKind::Start => format!("/v2/instances/{instance_id}/start"),
+            ActionKind::Snapshot => "/v2/snapshots".to_string(),
+        }
+    }
+
+    /// JSON body Vultr expects for this action. `Snapshot` needs the
+    /// instance id in the body; the per-instance actions send no body.
+    pub fn body_for(self, instance_id: &str) -> Option<String> {
+        match self {
+            ActionKind::Snapshot => {
+                Some(format!(r#"{{"instance_id":"{instance_id}"}}"#))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// One completed action call. `body` is the API response (often empty
+/// for 2xx) or a human-readable error string.
+#[derive(Debug)]
+pub struct ActionResult {
+    pub action: ActionKind,
+    pub label: String,
+    pub outcome: Result<String, String>,
+}
+
+/// Fire one action POST in a background thread. Returns a receiver the
+/// main loop drains via `try_recv`.
+pub fn spawn_vultr_action(
+    api_key: String,
+    action: ActionKind,
+    instance_id: String,
+    label: String,
+) -> Receiver<ActionResult> {
+    let (tx, rx) = channel();
+    thread::spawn(move || {
+        let url = format!("https://api.vultr.com{}", action.endpoint_path(&instance_id));
+        let auth = format!("Authorization: Bearer {api_key}");
+        let mut cmd = Command::new("curl");
+        cmd.args(["-sS", "-m", "30", "-X", "POST", "-H"])
+            .arg(&auth)
+            .args(["-H", "Content-Type: application/json"]);
+        if let Some(body) = action.body_for(&instance_id) {
+            cmd.arg("-d").arg(body);
+        }
+        cmd.arg(&url);
+        let outcome = match cmd.output() {
+            Ok(o) if o.status.success() => {
+                Ok(String::from_utf8_lossy(&o.stdout).into_owned())
+            }
+            Ok(o) => Err(format!(
+                "vultr action exit {}: {}",
+                o.status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&o.stderr).trim()
+            )),
+            Err(e) => Err(format!("vultr action curl spawn failed: {e}")),
+        };
+        let _ = tx.send(ActionResult {
+            action,
+            label,
+            outcome,
+        });
+    });
+    rx
+}
+
 /// Parse the `instances` array out of `GET /v2/instances`. Returns a
 /// human-readable error on malformed JSON.
 pub fn parse_instances(json: &str) -> Result<Vec<Instance>, String> {
@@ -249,6 +340,33 @@ mod tests {
         assert!(cache.instance_for_ip("203.0.113").is_none());
         assert!(cache.instance_for_ip("").is_none());
         assert!(cache.instance_for_ip("nope").is_none());
+    }
+
+    #[test]
+    fn action_endpoint_paths_are_correct() {
+        assert_eq!(ActionKind::Reboot.endpoint_path("abc-1"), "/v2/instances/abc-1/reboot");
+        assert_eq!(ActionKind::Halt.endpoint_path("abc-1"), "/v2/instances/abc-1/halt");
+        assert_eq!(ActionKind::Start.endpoint_path("abc-1"), "/v2/instances/abc-1/start");
+        assert_eq!(ActionKind::Snapshot.endpoint_path("abc-1"), "/v2/snapshots");
+    }
+
+    #[test]
+    fn snapshot_carries_instance_id_in_body() {
+        assert_eq!(
+            ActionKind::Snapshot.body_for("abc-1").as_deref(),
+            Some(r#"{"instance_id":"abc-1"}"#)
+        );
+        assert_eq!(ActionKind::Reboot.body_for("abc-1"), None);
+        assert_eq!(ActionKind::Halt.body_for("abc-1"), None);
+        assert_eq!(ActionKind::Start.body_for("abc-1"), None);
+    }
+
+    #[test]
+    fn action_labels_render_human_readable() {
+        assert_eq!(ActionKind::Reboot.label(), "reboot");
+        assert_eq!(ActionKind::Halt.label(), "halt (power off)");
+        assert_eq!(ActionKind::Start.label(), "start (power on)");
+        assert_eq!(ActionKind::Snapshot.label(), "snapshot");
     }
 
     #[test]

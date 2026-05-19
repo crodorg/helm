@@ -365,6 +365,7 @@ fn run(terminal: &mut Term, app: &mut App) -> Result<()> {
         app.ingest_processes_events();
         app.ingest_health_events();
         app.ingest_vultr_events();
+        app.ingest_vultr_action_events();
         app.ingest_buyvm_events();
         app.ingest_money_events();
         app.ingest_dns_events();
@@ -498,12 +499,42 @@ fn handle_history(app: &mut App, code: KeyCode) {
 }
 
 fn handle_vultr(app: &mut App, code: KeyCode) {
+    // Confirm modal takes precedence — swallow all keys but the
+    // y/n/esc trio so the user can't accidentally fire a scroll-key
+    // shortcut while the prompt is on screen.
+    if app.vultr_confirm.is_some() {
+        match code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => app.vultr_confirm_action(),
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                app.vultr_cancel_action()
+            }
+            _ => {}
+        }
+        return;
+    }
+    // Row selection: j/k drive the highlighted row + ensure_visible
+    // auto-scroll, so we override the default scroll-key wiring here.
+    match code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            app.vultr_select_next();
+            return;
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            app.vultr_select_prev();
+            return;
+        }
+        _ => {}
+    }
     if handle_scroll_keys(&app.vultr_scroll, code) {
         return;
     }
     match code {
         KeyCode::Esc => app.close_vultr(),
         KeyCode::Char('r') => app.refresh_vultr(),
+        KeyCode::Char('R') => app.vultr_request_action(crate::vultr::ActionKind::Reboot),
+        KeyCode::Char('H') => app.vultr_request_action(crate::vultr::ActionKind::Halt),
+        KeyCode::Char('S') => app.vultr_request_action(crate::vultr::ActionKind::Start),
+        KeyCode::Char('N') => app.vultr_request_action(crate::vultr::ActionKind::Snapshot),
         _ => {}
     }
 }

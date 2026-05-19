@@ -121,7 +121,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         (Mode::AgentTail, _) => " [j/k] scroll   [pgup/pgdn] page   [g/G] top/bottom   [esc] back ",
         (Mode::Processes, _) => " [j/k] scroll   [pgup/pgdn] page   [r] refresh   [esc] back ",
         (Mode::Health, _) => " [j/k] scroll   [pgup/pgdn] page   [r] refresh   [esc] back ",
-        (Mode::Vultr, _) => " [j/k] scroll   [pgup/pgdn] page   [r] refresh   [esc] back ",
+        (Mode::Vultr, _) => " [j/k] select   [R]eboot [H]alt [S]tart sNapshot[N]   [r] refresh   [esc] back ",
         (Mode::Buyvm, _) => " [j/k] scroll   [pgup/pgdn] page   [r] refresh   [esc] back ",
         (Mode::Money, _) => " [r] refresh   [esc] back ",
         (Mode::LogPicker, _) => " press a log key   [esc] cancel ",

@@ -11,7 +11,7 @@ use crate::inventory::processes::{self as procs_inv, Process};
 use crate::inventory::services::{parse_rcctl, Service};
 use crate::money::{self, MoneyCache, MoneyResult, MoneySlot};
 use crate::buyvm::{self, BuyvmCache, BuyvmResult};
-use crate::vultr::{self, VultrCache, VultrResult, VultrSlot};
+use crate::vultr::{self, ActionKind, ActionResult, VultrCache, VultrResult, VultrSlot};
 use crate::ipc::protocol::{Event as IpcEvent, Request as IpcRequest};
 use crate::ipc::server::Job;
 use crate::ssh::collect::{
@@ -375,6 +375,13 @@ pub struct VultrState {
     pub plans_raw: Option<Result<String, String>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct VultrConfirm {
+    pub action: ActionKind,
+    pub instance_id: String,
+    pub label: String,
+}
+
 impl VultrState {
     fn slot_mut(&mut self, s: VultrSlot) -> &mut Option<Result<String, String>> {
         match s {
@@ -605,6 +612,16 @@ pub struct App {
     /// True once `start_vultr_fetch` has run at least once — distinguishes
     /// "API key not set" from "fetch in flight" for the empty pane.
     pub vultr_fetch_attempted: bool,
+    /// Index into `vultr_cache.instances` for the currently highlighted
+    /// row. Always clamped to a valid value when rendering, so a fetch
+    /// that returns fewer instances than before doesn't crash the pane.
+    pub vultr_selected: usize,
+    /// In-flight action confirmation prompt (modal overlay on the vultr
+    /// pane). None when no confirm is pending.
+    pub vultr_confirm: Option<VultrConfirm>,
+    /// Receiver for the most recently fired action (one-shot — dropped
+    /// after the result is ingested).
+    pub vultr_action_rx: Option<Receiver<ActionResult>>,
 
     pub buyvm_pane: Option<BuyvmState>,
     pub buyvm_cache: Option<BuyvmCache>,
@@ -681,6 +698,9 @@ impl App {
             vultr_cache: None,
             vultr_error: None,
             vultr_fetch_attempted: false,
+            vultr_selected: 0,
+            vultr_confirm: None,
+            vultr_action_rx: None,
             buyvm_pane: None,
             buyvm_cache: None,
             buyvm_error: None,
@@ -1207,6 +1227,118 @@ impl App {
 
     pub fn open_vultr(&mut self) {
         self.mode = Mode::Vultr;
+        // Clamp selection to current instance count so a fetch that
+        // shrank the list (e.g. after a deletion) doesn't keep us on a
+        // non-existent row.
+        let len = self
+            .vultr_cache
+            .as_ref()
+            .map(|c| c.instances.len())
+            .unwrap_or(0);
+        if len > 0 && self.vultr_selected >= len {
+            self.vultr_selected = len - 1;
+        }
+    }
+
+    pub fn vultr_select_next(&mut self) {
+        let Some(cache) = self.vultr_cache.as_ref() else {
+            return;
+        };
+        if cache.instances.is_empty() {
+            return;
+        }
+        self.vultr_selected = (self.vultr_selected + 1).min(cache.instances.len() - 1);
+    }
+
+    pub fn vultr_select_prev(&mut self) {
+        self.vultr_selected = self.vultr_selected.saturating_sub(1);
+    }
+
+    /// Stage a confirm modal for `action` against the currently selected
+    /// instance. No-op when the pane has no cache or the cursor sits on
+    /// nothing. The action itself does not fire until `vultr_confirm_action`
+    /// is called.
+    pub fn vultr_request_action(&mut self, action: ActionKind) {
+        let Some(cache) = self.vultr_cache.as_ref() else {
+            return;
+        };
+        let Some(inst) = cache.instances.get(self.vultr_selected) else {
+            return;
+        };
+        self.vultr_confirm = Some(VultrConfirm {
+            action,
+            instance_id: inst.id.clone(),
+            label: if inst.label.is_empty() {
+                inst.id.clone()
+            } else {
+                inst.label.clone()
+            },
+        });
+    }
+
+    pub fn vultr_cancel_action(&mut self) {
+        self.vultr_confirm = None;
+    }
+
+    /// Confirm the pending action: fires a `POST` against the Vultr API
+    /// in a background thread. Status line shows immediate "firing…"
+    /// feedback; the result lands later via `ingest_vultr_action_events`.
+    pub fn vultr_confirm_action(&mut self) {
+        let Some(confirm) = self.vultr_confirm.take() else {
+            return;
+        };
+        let Ok(key) = std::env::var("VULTR_API_KEY") else {
+            self.status = "VULTR_API_KEY not set — action skipped".into();
+            return;
+        };
+        if key.trim().is_empty() {
+            self.status = "VULTR_API_KEY empty — action skipped".into();
+            return;
+        }
+        self.status = format!(
+            "vultr {}: firing on {}…",
+            confirm.action.label(),
+            confirm.label
+        );
+        let rx = vultr::spawn_vultr_action(
+            key,
+            confirm.action,
+            confirm.instance_id,
+            confirm.label,
+        );
+        self.vultr_action_rx = Some(rx);
+    }
+
+    /// Drain the one-shot action result channel. On success, refire the
+    /// instance fetch so the table picks up new power_status / a new
+    /// snapshot row. On failure, surface the error in the status line.
+    pub fn ingest_vultr_action_events(&mut self) {
+        let Some(rx) = self.vultr_action_rx.as_ref() else {
+            return;
+        };
+        let Ok(res) = rx.try_recv() else {
+            return;
+        };
+        self.vultr_action_rx = None;
+        match res.outcome {
+            Ok(_) => {
+                self.status = format!(
+                    "vultr {}: {} ✓ (refreshing inventory)",
+                    res.action.label(),
+                    res.label
+                );
+                // Vultr's state transition takes a beat; the next fetch
+                // will reflect it. Fire-and-forget.
+                self.start_vultr_fetch();
+            }
+            Err(e) => {
+                self.status = format!(
+                    "vultr {} on {} failed: {e}",
+                    res.action.label(),
+                    res.label
+                );
+            }
+        }
     }
 
     /// Fire a background BuyVM fetch using `BUYVM_API_KEY` (and optional
