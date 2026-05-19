@@ -1,6 +1,7 @@
 mod agent;
 mod browse;
 mod health;
+mod history;
 mod log_picker;
 mod log_tail;
 mod money;
@@ -52,6 +53,7 @@ pub fn draw(f: &mut Frame, app: &App) {
             log_picker::draw(f, chunks[1], app);
         }
         Mode::LogTail => log_tail::draw(f, chunks[1], app),
+        Mode::History => history::draw(f, chunks[1], app),
     }
     draw_footer(f, chunks[2], app);
 }
@@ -69,6 +71,7 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
         Mode::Money => " money ",
         Mode::LogPicker => " logs ",
         Mode::LogTail => " logs ",
+        Mode::History => " history ",
     };
     let agent_active = app.agent_active.is_some();
     let agent_chip_bg = if agent_active {
@@ -103,7 +106,7 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     let hints = match (app.mode, app.runner.focus) {
-        (Mode::Browse, _) => " [j/k] move   [enter] ssh   [r] run cmd   [s] services   [p] processes   [h] health   [v] vultr   [m] money   [l] logs   [a] shortcuts   [c] agent tail   [q] quit ",
+        (Mode::Browse, _) => " [j/k] move   [enter] ssh   [r] run cmd   [s] services   [p] processes   [h] health   [v] vultr   [m] money   [l] logs   [t] history   [a] shortcuts   [c] agent tail   [q] quit ",
         (Mode::Runner, Some(InputFocus::Password)) => " typing password — [enter] submit   [esc] cancel ",
         (Mode::Runner, Some(InputFocus::Command)) => " typing command — [enter] run   [esc] back ",
         (Mode::Runner, None) => " [j/k] scroll   [pgup/pgdn] page   [g/G] top/bottom   [r] new cmd   [esc] back ",
@@ -116,6 +119,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         (Mode::Money, _) => " [r] refresh   [esc] back ",
         (Mode::LogPicker, _) => " press a log key   [esc] cancel ",
         (Mode::LogTail, _) => " [j/k] scroll   [pgup/pgdn] page   [g/G] top/bottom   [esc] kill tail + back ",
+        (Mode::History, _) => " [j/k] move   [enter] replay (loads cmd into runner)   [r] refresh   [esc] back ",
     };
 
     let line = if app.status.is_empty() {

@@ -379,6 +379,7 @@ fn handle_key(app: &mut App, code: KeyCode) {
         Mode::Money => handle_money(app, code),
         Mode::LogPicker => handle_log_picker(app, code),
         Mode::LogTail => handle_log_tail(app, code),
+        Mode::History => handle_history(app, code),
     }
 }
 
@@ -443,6 +444,17 @@ fn handle_money(app: &mut App, code: KeyCode) {
     }
 }
 
+fn handle_history(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Esc => app.close_history(),
+        KeyCode::Char('r') => app.refresh_history(),
+        KeyCode::Char('j') | KeyCode::Down => app.history_next(),
+        KeyCode::Char('k') | KeyCode::Up => app.history_prev(),
+        KeyCode::Enter => app.replay_selected_history(),
+        _ => {}
+    }
+}
+
 fn handle_vultr(app: &mut App, code: KeyCode) {
     if handle_scroll_keys(&app.vultr_scroll, code) {
         return;
@@ -502,6 +514,7 @@ fn handle_browse(app: &mut App, code: KeyCode) {
         KeyCode::Char('v') => app.open_vultr(),
         KeyCode::Char('m') => app.open_money(),
         KeyCode::Char('l') => app.open_log_picker(),
+        KeyCode::Char('t') => app.open_history(),
         KeyCode::Char('a') => app.open_shortcuts(),
         KeyCode::Char('c') => app.open_agent_tail(),
         _ => {}

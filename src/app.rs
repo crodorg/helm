@@ -203,6 +203,25 @@ impl ScrollState {
     pub fn to_bottom(&self) {
         self.sticky.set(true);
     }
+
+    /// Nudge `offset` so that row `selected` is inside the next viewport
+    /// `[offset, offset+viewport)`. No-op when the row is already visible
+    /// or when the viewport is empty. Disables `sticky` because the caller
+    /// is driving by selection, not by tail position.
+    pub fn ensure_visible(&self, selected: usize, total: usize, viewport: usize) {
+        if total == 0 || viewport == 0 {
+            return;
+        }
+        self.sticky.set(false);
+        let max = total.saturating_sub(viewport);
+        let mut off = self.offset.get().min(max);
+        if selected < off {
+            off = selected;
+        } else if selected >= off + viewport {
+            off = selected + 1 - viewport;
+        }
+        self.offset.set(off.min(max));
+    }
 }
 
 fn now_unix() -> i64 {
@@ -265,6 +284,14 @@ pub enum Mode {
     Money,
     LogPicker,
     LogTail,
+    History,
+}
+
+pub struct HistoryState {
+    pub entries: Vec<crate::history::RunRecord>,
+    pub selected: usize,
+    pub scroll: ScrollState,
+    pub error: Option<String>,
 }
 
 /// Hard cap on lines retained in `LogTailState.lines`. Tail can run for
@@ -540,6 +567,8 @@ pub struct App {
 
     pub log_tail: Option<LogTailState>,
 
+    pub history_pane: Option<HistoryState>,
+
     // agent-as-operator state
     pub jobs_rx: Option<Receiver<Job>>,
     pub agent_history: Vec<AgentHistoryEntry>,
@@ -591,6 +620,7 @@ impl App {
             money_cache: None,
             money_fetch_attempted: false,
             log_tail: None,
+            history_pane: None,
             jobs_rx: None,
             agent_history: Vec::new(),
             agent_active: None,
@@ -1331,6 +1361,95 @@ impl App {
         if self.mode == Mode::Money {
             self.mode = Mode::Browse;
         }
+    }
+
+    /// Open the history pane. Loads up to 200 most-recent runs (both
+    /// sources) from the SQLite store. If history is unattached the pane
+    /// still opens but renders an empty-state error.
+    pub fn open_history(&mut self) {
+        self.mode = Mode::History;
+        let state = match self.history.as_ref() {
+            Some(store) => match store.recent_runs(None, 200) {
+                Ok(entries) => HistoryState {
+                    entries,
+                    selected: 0,
+                    scroll: ScrollState::new_top(),
+                    error: None,
+                },
+                Err(e) => HistoryState {
+                    entries: Vec::new(),
+                    selected: 0,
+                    scroll: ScrollState::new_top(),
+                    error: Some(format!("history load failed: {e}")),
+                },
+            },
+            None => HistoryState {
+                entries: Vec::new(),
+                selected: 0,
+                scroll: ScrollState::new_top(),
+                error: Some("history db unavailable".into()),
+            },
+        };
+        self.history_pane = Some(state);
+    }
+
+    pub fn refresh_history(&mut self) {
+        if self.mode == Mode::History {
+            self.open_history();
+        }
+    }
+
+    pub fn close_history(&mut self) {
+        if self.mode == Mode::History {
+            self.history_pane = None;
+            self.mode = Mode::Browse;
+        }
+    }
+
+    pub fn history_next(&mut self) {
+        if let Some(s) = self.history_pane.as_mut() {
+            if !s.entries.is_empty() {
+                s.selected = (s.selected + 1).min(s.entries.len() - 1);
+            }
+        }
+    }
+
+    pub fn history_prev(&mut self) {
+        if let Some(s) = self.history_pane.as_mut() {
+            s.selected = s.selected.saturating_sub(1);
+        }
+    }
+
+    /// Replay the selected history entry: jump Browse selection to the
+    /// matching host (by `ssh_alias`), open the runner with the previous
+    /// command pre-loaded in the input buffer, focus on Command so the
+    /// operator can edit before pressing Enter. If no host matches the
+    /// alias, set a status message and stay in History.
+    pub fn replay_selected_history(&mut self) {
+        let Some(state) = self.history_pane.as_ref() else {
+            return;
+        };
+        let Some(entry) = state.entries.get(state.selected).cloned() else {
+            return;
+        };
+        let Some(idx) = self
+            .config
+            .hosts
+            .iter()
+            .position(|h| h.ssh_alias == entry.alias)
+        else {
+            self.status = format!("no host with alias '{}'", entry.alias);
+            return;
+        };
+        self.selected = idx;
+        self.history_pane = None;
+        self.mode = Mode::Runner;
+        self.runner = RunnerState {
+            input: entry.cmd.clone(),
+            focus: Some(InputFocus::Command),
+            scroll: ScrollState::new_sticky(),
+            ..RunnerState::default()
+        };
     }
 
     pub fn ingest_processes_events(&mut self) {
