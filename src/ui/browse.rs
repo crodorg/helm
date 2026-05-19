@@ -14,8 +14,50 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
         .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
         .split(area);
 
-    draw_hosts(f, cols[0], app);
+    // Left column splits vertically: hosts on top, key palette below.
+    // Palette height: one row per binding + 2 borders, capped so the
+    // host list always has at least 5 visible rows even on small terms.
+    let bindings = crate::help::bindings_for(app.mode, app.runner.focus);
+    let palette_h = (bindings.len() as u16 + 2)
+        .min(cols[0].height.saturating_sub(5))
+        .max(3);
+
+    let left = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(palette_h)])
+        .split(cols[0]);
+
+    draw_hosts(f, left[0], app);
+    draw_keys_palette(f, left[1], bindings);
     draw_detail(f, cols[1], app);
+}
+
+fn draw_keys_palette(f: &mut Frame, area: Rect, bindings: &[crate::help::Binding]) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" keys (?) ")
+        .border_style(Style::default().fg(Color::DarkGray));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    // Single column — keeps long action labels readable. The ? overlay
+    // exists for when the palette gets truncated by a tiny terminal.
+    let max_key = bindings.iter().map(|b| b.key.len()).max().unwrap_or(0);
+    let lines: Vec<Line<'static>> = bindings
+        .iter()
+        .map(|b| {
+            Line::from(vec![
+                Span::raw(" "),
+                Span::styled(
+                    format!("[{}]", b.key),
+                    Style::default().fg(Color::Yellow),
+                ),
+                Span::raw(" ".repeat(max_key.saturating_sub(b.key.len()) + 2)),
+                Span::styled(b.action, Style::default().fg(Color::White)),
+            ])
+        })
+        .collect();
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 fn draw_hosts(f: &mut Frame, area: Rect, app: &App) {

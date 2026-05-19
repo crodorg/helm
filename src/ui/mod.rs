@@ -137,17 +137,18 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
-    let bindings = crate::help::bindings_for(app.mode, app.runner.focus);
-    let hints = crate::help::format_footer(bindings);
-
+    // Key hints live in the Browse left-column palette + the `?`
+    // overlay; the footer is now reserved for transient status only.
     let line = if app.status.is_empty() {
-        Line::from(Span::styled(hints, Style::default().fg(Color::DarkGray)))
+        Line::from(Span::styled(
+            " press [?] for keys ",
+            Style::default().fg(Color::DarkGray),
+        ))
     } else {
-        Line::from(vec![
-            Span::styled(hints, Style::default().fg(Color::DarkGray)),
-            Span::raw("  "),
-            Span::styled(app.status.clone(), Style::default().fg(Color::Yellow)),
-        ])
+        Line::from(Span::styled(
+            app.status.clone(),
+            Style::default().fg(Color::Yellow),
+        ))
     };
     f.render_widget(Paragraph::new(line), area);
 }

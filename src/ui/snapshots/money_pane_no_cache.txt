@@ -13,4 +13,4 @@
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
- [r] refresh   [f] cycle filter (per business)   [?] help   [esc] back
+ press [?] for keys

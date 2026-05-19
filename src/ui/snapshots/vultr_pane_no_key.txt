@@ -13,4 +13,4 @@
 │                                                                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
- [j/k] select   [R] reboot   [H] halt   [S] start   [N] snapshot (BILLABLE)   [r
+ press [?] for keys

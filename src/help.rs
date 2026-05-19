@@ -59,19 +59,6 @@ pub fn mode_title(mode: Mode) -> &'static str {
     }
 }
 
-/// Render bindings as a one-line footer hint: ` [j/k] move   [r] refresh `.
-pub fn format_footer(bindings: &[Binding]) -> String {
-    let mut s = String::from(" ");
-    for (i, bind) in bindings.iter().enumerate() {
-        if i > 0 {
-            s.push_str("   ");
-        }
-        s.push_str(&format!("[{}] {}", bind.key, bind.action));
-    }
-    s.push(' ');
-    s
-}
-
 const BROWSE: [Binding; 18] = [
     b("j/k", "move"),
     b("enter", "ssh"),
@@ -238,17 +225,6 @@ mod tests {
         ] {
             assert!(!bindings_for(m, None).is_empty(), "no bindings for {m:?}");
         }
-    }
-
-    #[test]
-    fn format_footer_joins_with_three_spaces() {
-        let s = format_footer(&[b("j/k", "move"), b("esc", "back")]);
-        assert_eq!(s, " [j/k] move   [esc] back ");
-    }
-
-    #[test]
-    fn format_footer_empty_is_just_padding() {
-        assert_eq!(format_footer(&[]), "  ");
     }
 
     #[test]
