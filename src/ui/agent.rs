@@ -65,16 +65,12 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
 
     let inner_h = area.height.saturating_sub(2) as usize;
     let total = lines.len();
-    let scroll = if total > inner_h {
-        (total - inner_h) as u16
-    } else {
-        0
-    };
+    let start = app.agent_tail_scroll.render_start(total, inner_h);
 
     let p = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: false })
-        .scroll((scroll, 0));
+        .scroll((start as u16, 0));
     f.render_widget(p, area);
 }
 

@@ -393,8 +393,45 @@ fn handle_log_picker(app: &mut App, code: KeyCode) {
 }
 
 fn handle_log_tail(app: &mut App, code: KeyCode) {
+    if let Some(state) = app.log_tail.as_ref() {
+        if handle_scroll_keys(&state.scroll, code) {
+            return;
+        }
+    }
     if matches!(code, KeyCode::Esc) {
         app.close_log_tail();
+    }
+}
+
+/// Dispatch j/k/PgUp/PgDn/g/G to a ScrollState. Returns true if the key
+/// was consumed (so the caller doesn't double-handle Esc/etc.).
+fn handle_scroll_keys(scroll: &crate::app::ScrollState, code: KeyCode) -> bool {
+    match code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            scroll.line_down();
+            true
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            scroll.line_up();
+            true
+        }
+        KeyCode::PageDown => {
+            scroll.page_down();
+            true
+        }
+        KeyCode::PageUp => {
+            scroll.page_up();
+            true
+        }
+        KeyCode::Char('g') => {
+            scroll.to_top();
+            true
+        }
+        KeyCode::Char('G') => {
+            scroll.to_bottom();
+            true
+        }
+        _ => false,
     }
 }
 
@@ -407,6 +444,9 @@ fn handle_money(app: &mut App, code: KeyCode) {
 }
 
 fn handle_vultr(app: &mut App, code: KeyCode) {
+    if handle_scroll_keys(&app.vultr_scroll, code) {
+        return;
+    }
     match code {
         KeyCode::Esc => app.close_vultr(),
         KeyCode::Char('r') => app.refresh_vultr(),
@@ -415,6 +455,11 @@ fn handle_vultr(app: &mut App, code: KeyCode) {
 }
 
 fn handle_health(app: &mut App, code: KeyCode) {
+    if let Some(state) = app.health_pane.as_ref() {
+        if handle_scroll_keys(&state.scroll, code) {
+            return;
+        }
+    }
     match code {
         KeyCode::Esc => app.close_health(),
         KeyCode::Char('r') => app.refresh_health(),
@@ -423,6 +468,11 @@ fn handle_health(app: &mut App, code: KeyCode) {
 }
 
 fn handle_processes(app: &mut App, code: KeyCode) {
+    if let Some(state) = app.processes_pane.as_ref() {
+        if handle_scroll_keys(&state.scroll, code) {
+            return;
+        }
+    }
     match code {
         KeyCode::Esc => app.close_processes(),
         KeyCode::Char('r') => app.refresh_processes(),
@@ -431,6 +481,9 @@ fn handle_processes(app: &mut App, code: KeyCode) {
 }
 
 fn handle_agent_tail(app: &mut App, code: KeyCode) {
+    if handle_scroll_keys(&app.agent_tail_scroll, code) {
+        return;
+    }
     if matches!(code, KeyCode::Esc | KeyCode::Char('q')) {
         app.close_agent_tail();
     }
@@ -467,6 +520,11 @@ fn handle_shortcuts(app: &mut App, code: KeyCode) {
 }
 
 fn handle_services(app: &mut App, code: KeyCode) {
+    if let Some(state) = app.services.as_ref() {
+        if handle_scroll_keys(&state.scroll, code) {
+            return;
+        }
+    }
     match code {
         KeyCode::Esc => app.close_services(),
         KeyCode::Char('r') => app.refresh_services(),
@@ -529,6 +587,23 @@ fn browse_row_at(term: Rect, col: u16, row: u16, host_count: usize) -> Option<us
 }
 
 fn handle_runner(app: &mut App, code: KeyCode) {
+    // PgUp/PgDn always scroll, regardless of focus (they're not text input
+    // characters). j/k/g/G only when not actively typing — they'd be
+    // captured as command/password characters otherwise.
+    match code {
+        KeyCode::PageUp => {
+            app.runner.scroll.page_up();
+            return;
+        }
+        KeyCode::PageDown => {
+            app.runner.scroll.page_down();
+            return;
+        }
+        _ => {}
+    }
+    if app.runner.focus.is_none() && handle_scroll_keys(&app.runner.scroll, code) {
+        return;
+    }
     match app.runner.focus {
         Some(InputFocus::Password) => match code {
             KeyCode::Esc => {

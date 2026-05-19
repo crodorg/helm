@@ -83,7 +83,7 @@ fn draw_body(f: &mut Frame, area: Rect, s: &crate::app::ServicesState) {
 
     let name_width = sorted.iter().map(|s| s.name.len()).max().unwrap_or(0);
 
-    let items: Vec<ListItem> = sorted
+    let all_items: Vec<ListItem> = sorted
         .iter()
         .map(|svc| {
             let color = state_color(svc.state);
@@ -102,8 +102,12 @@ fn draw_body(f: &mut Frame, area: Rect, s: &crate::app::ServicesState) {
         })
         .collect();
 
-    let list = List::new(items);
-    f.render_widget(list, area);
+    let total = all_items.len();
+    let viewport = area.height as usize;
+    let start = s.scroll.render_start(total, viewport);
+    let end = (start + viewport).min(total);
+    let visible: Vec<ListItem> = all_items.into_iter().skip(start).take(end - start).collect();
+    f.render_widget(List::new(visible), area);
 }
 
 fn count_states(svc: &[Service]) -> (usize, usize, usize, usize) {

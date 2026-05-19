@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::sync::mpsc::Receiver;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -17,6 +18,192 @@ use crate::ssh::collect::{
 };
 use crate::ssh::{spawn_remote, RunEvent, RunHandle};
 use crate::tmux::shell_quote;
+
+pub const PAGE_STEP: usize = 10;
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::ScrollState;
+
+    #[test]
+    fn sticky_renders_bottom_regardless_of_offset() {
+        let s = ScrollState::new_sticky();
+        // total=100, viewport=20 → max=80; sticky should pin to 80.
+        assert_eq!(s.render_start(100, 20), 80);
+        assert_eq!(s.offset.get(), 80);
+    }
+
+    #[test]
+    fn top_anchored_stays_at_zero_until_scrolled() {
+        let s = ScrollState::new_top();
+        assert_eq!(s.render_start(100, 20), 0);
+        s.line_down();
+        assert_eq!(s.render_start(100, 20), 1);
+    }
+
+    #[test]
+    fn line_up_disables_sticky() {
+        let s = ScrollState::new_sticky();
+        s.render_start(100, 20); // offset becomes 80
+        s.line_up();
+        assert!(!s.sticky.get());
+        assert_eq!(s.render_start(100, 20), 79);
+    }
+
+    #[test]
+    fn down_scroll_clamps_and_re_enables_sticky() {
+        let s = ScrollState::new_top();
+        // total=10, viewport=20 → max=0; any down stays at 0, no sticky flip
+        // (sticky on max==0 is the "no scroll needed" case, not "at bottom").
+        s.line_down();
+        assert_eq!(s.render_start(10, 20), 0);
+        // total=30, viewport=10 → max=20
+        for _ in 0..50 {
+            s.line_down();
+        }
+        assert_eq!(s.render_start(30, 10), 20);
+        assert!(s.sticky.get(), "reaching the bottom re-enables sticky");
+    }
+
+    #[test]
+    fn page_up_and_page_down_jump_by_step() {
+        let s = ScrollState::new_top();
+        s.page_down();
+        assert_eq!(s.offset.get(), 10);
+        s.page_up();
+        assert_eq!(s.offset.get(), 0);
+    }
+
+    #[test]
+    fn to_top_and_to_bottom_set_endpoints() {
+        let s = ScrollState::new_top();
+        s.page_down();
+        s.page_down();
+        assert_eq!(s.offset.get(), 20);
+        s.to_top();
+        assert_eq!(s.offset.get(), 0);
+        assert!(!s.sticky.get());
+        s.to_bottom();
+        assert!(s.sticky.get());
+        assert_eq!(s.render_start(100, 20), 80);
+    }
+
+    #[test]
+    fn render_clamps_offset_past_total() {
+        let s = ScrollState::new_top();
+        s.offset.set(9999);
+        assert_eq!(s.render_start(50, 10), 40);
+    }
+
+    #[test]
+    fn empty_content_yields_zero_start() {
+        let s = ScrollState::new_top();
+        assert_eq!(s.render_start(0, 20), 0);
+    }
+
+    #[test]
+    fn line_down_starting_at_bottom_keeps_sticky() {
+        let s = ScrollState::new_sticky();
+        s.render_start(50, 10);
+        // User mashes j past the bottom — should remain sticky, render unchanged.
+        for _ in 0..10 {
+            s.line_down();
+        }
+        assert!(s.sticky.get());
+        assert_eq!(s.render_start(50, 10), 40);
+    }
+}
+
+/// Per-pane scroll state. Used by every pane that renders a list / stream
+/// longer than its viewport. Interior mutability via `Cell` so renderers
+/// (which take `&App`) can clamp `offset` against the current total/
+/// viewport and flip `sticky` when the user scrolls back to the bottom.
+///
+/// Conventions:
+/// - `offset` is the row index from the top of the content.
+/// - `sticky == true` ignores `offset` at render time and renders the
+///   bottom of the content; useful for streaming panes that should
+///   auto-follow new lines until the user scrolls up.
+/// - Streaming panes (LogTail, AgentTail, Runner output) construct with
+///   `ScrollState::new_sticky()`; tabular panes use `ScrollState::new_top()`.
+#[derive(Debug, Default)]
+pub struct ScrollState {
+    pub offset: Cell<usize>,
+    pub sticky: Cell<bool>,
+}
+
+impl Clone for ScrollState {
+    fn clone(&self) -> Self {
+        Self {
+            offset: Cell::new(self.offset.get()),
+            sticky: Cell::new(self.sticky.get()),
+        }
+    }
+}
+
+impl ScrollState {
+    pub fn new_sticky() -> Self {
+        Self {
+            offset: Cell::new(0),
+            sticky: Cell::new(true),
+        }
+    }
+
+    pub fn new_top() -> Self {
+        Self {
+            offset: Cell::new(0),
+            sticky: Cell::new(false),
+        }
+    }
+
+    /// Renderer-side: compute the start row given current total content +
+    /// viewport. Side effects: clamps `offset` to `[0, total-viewport]`;
+    /// re-enables `sticky` when the clamped offset lands exactly at the
+    /// bottom (so an explicit scroll-down-past-bottom resumes tailing).
+    pub fn render_start(&self, total: usize, viewport: usize) -> usize {
+        let max = total.saturating_sub(viewport);
+        if self.sticky.get() {
+            self.offset.set(max);
+            return max;
+        }
+        let off = self.offset.get().min(max);
+        if off == max && max > 0 {
+            self.sticky.set(true);
+        }
+        self.offset.set(off);
+        off
+    }
+
+    pub fn line_up(&self) {
+        self.sticky.set(false);
+        self.offset.set(self.offset.get().saturating_sub(1));
+    }
+
+    pub fn line_down(&self) {
+        // Don't disable sticky on a down-scroll: if the user is already at
+        // bottom (sticky == true), one more `j` should keep them there.
+        // `render_start` will re-clamp.
+        self.offset.set(self.offset.get().saturating_add(1));
+    }
+
+    pub fn page_up(&self) {
+        self.sticky.set(false);
+        self.offset.set(self.offset.get().saturating_sub(PAGE_STEP));
+    }
+
+    pub fn page_down(&self) {
+        self.offset.set(self.offset.get().saturating_add(PAGE_STEP));
+    }
+
+    pub fn to_top(&self) {
+        self.sticky.set(false);
+        self.offset.set(0);
+    }
+
+    pub fn to_bottom(&self) {
+        self.sticky.set(true);
+    }
+}
 
 fn now_unix() -> i64 {
     SystemTime::now()
@@ -51,6 +238,7 @@ fn spawn_health_state(businesses: &[crate::config::Business]) -> HealthState {
         rx,
         rows,
         business_names,
+        scroll: ScrollState::new_top(),
     }
 }
 
@@ -96,6 +284,7 @@ pub struct LogTailState {
     pub lines: Vec<LogLine>,
     pub exit: Option<i32>,
     pub error: Option<String>,
+    pub scroll: ScrollState,
 }
 
 #[derive(Debug, Clone)]
@@ -152,6 +341,7 @@ pub struct HealthState {
     /// this rather than `config.businesses` directly so a later config
     /// reload doesn't desync indices.
     pub business_names: Vec<String>,
+    pub scroll: ScrollState,
 }
 
 impl HealthState {
@@ -169,6 +359,7 @@ pub struct ProcessesState {
     pub processes: Option<Vec<Process>>,
     pub ports: Option<Vec<ListeningSocket>>,
     pub error: Option<String>,
+    pub scroll: ScrollState,
 }
 
 impl ProcessesState {
@@ -270,6 +461,7 @@ pub struct RunnerState {
     pub current_cmd: Option<String>,
     pub current_started_at: Option<Instant>,
     pub current_started_at_unix: Option<i64>,
+    pub scroll: ScrollState,
 }
 
 pub struct ServicesState {
@@ -281,6 +473,7 @@ pub struct ServicesState {
     pub failed: Option<Result<String, String>>,
     pub services: Option<Vec<Service>>,
     pub error: Option<String>,
+    pub scroll: ScrollState,
 }
 
 impl ServicesState {
@@ -357,6 +550,13 @@ pub struct App {
     /// helm continues to work but state is ephemeral. Mutex via &mut self
     /// is sufficient because every call is on the main loop thread.
     pub history: Option<HistoryStore>,
+
+    /// Scroll state for the AgentTail pane. Mode-level rather than
+    /// per-entry because the pane shows one continuous transcript.
+    pub agent_tail_scroll: ScrollState,
+    /// Scroll state for the Vultr table (no in-pane state struct exists —
+    /// the cache lives directly on App, so the scroll lives here too).
+    pub vultr_scroll: ScrollState,
 }
 
 impl std::fmt::Debug for App {
@@ -396,6 +596,8 @@ impl App {
             agent_active: None,
             agent_queue: VecDeque::new(),
             history: None,
+            agent_tail_scroll: ScrollState::new_sticky(),
+            vultr_scroll: ScrollState::new_top(),
         }
     }
 
@@ -693,6 +895,7 @@ impl App {
         self.mode = Mode::Runner;
         self.runner = RunnerState {
             focus: Some(InputFocus::Command),
+            scroll: ScrollState::new_sticky(),
             ..RunnerState::default()
         };
     }
@@ -721,6 +924,7 @@ impl App {
             failed: None,
             services: None,
             error: None,
+            scroll: ScrollState::new_top(),
         });
     }
 
@@ -740,6 +944,7 @@ impl App {
             failed: None,
             services: None,
             error: None,
+            scroll: ScrollState::new_top(),
         });
     }
 
@@ -766,6 +971,7 @@ impl App {
             processes: None,
             ports: None,
             error: None,
+            scroll: ScrollState::new_top(),
         });
     }
 
@@ -785,6 +991,7 @@ impl App {
             processes: None,
             ports: None,
             error: None,
+            scroll: ScrollState::new_top(),
         });
     }
 
@@ -1026,6 +1233,7 @@ impl App {
             ))],
             exit: None,
             error: None,
+            scroll: ScrollState::new_sticky(),
         };
         match crate::ssh::spawn_remote(&alias, &cmd) {
             Ok(handle) => state.handle = Some(handle),
@@ -1184,6 +1392,7 @@ impl App {
         self.runner = RunnerState {
             focus: Some(InputFocus::Command),
             input: s.cmd.clone(),
+            scroll: ScrollState::new_sticky(),
             ..RunnerState::default()
         };
         match crate::ssh::spawn_remote(&alias, &s.cmd) {

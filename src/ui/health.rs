@@ -71,7 +71,7 @@ fn draw_header(f: &mut Frame, area: Rect) {
 
 fn draw_body(f: &mut Frame, area: Rect, s: &HealthState) {
     let now = now_unix();
-    let items: Vec<ListItem> = s
+    let all_items: Vec<ListItem> = s
         .business_names
         .iter()
         .enumerate()
@@ -80,8 +80,12 @@ fn draw_body(f: &mut Frame, area: Rect, s: &HealthState) {
             row_to_item(name, row, now)
         })
         .collect();
-    let list = List::new(items);
-    f.render_widget(list, area);
+    let total = all_items.len();
+    let viewport = area.height as usize;
+    let start = s.scroll.render_start(total, viewport);
+    let end = (start + viewport).min(total);
+    let visible: Vec<ListItem> = all_items.into_iter().skip(start).take(end - start).collect();
+    f.render_widget(List::new(visible), area);
 }
 
 fn row_to_item<'a>(name: &str, row: Option<&Health>, now: i64) -> ListItem<'a> {

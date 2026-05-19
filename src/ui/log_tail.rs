@@ -36,20 +36,23 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // Render the most recent `inner.height` lines — the tail buffer can be
-    // huge, and ratatui's List doesn't ship a built-in "stick to bottom"
-    // primitive. Manual windowing keeps the latest line visible without
-    // pulling in an additional scroll-state crate.
+    // Window the buffer through the shared ScrollState. Renderer-side
+    // call to `render_start` clamps the offset against the current total
+    // and may re-enable sticky-bottom if the user scrolled back down to
+    // the end. Sticky-bottom default means new lines auto-follow until
+    // the operator presses k / PgUp / g.
     let visible: usize = inner.height as usize;
-    let start = state.lines.len().saturating_sub(visible);
-    let items: Vec<ListItem> = state.lines[start..]
+    let total = state.lines.len();
+    let start = state.scroll.render_start(total, visible);
+    let end = (start + visible).min(total);
+    let items: Vec<ListItem> = state.lines[start..end]
         .iter()
         .map(render_line)
         .collect();
     let list = List::new(items);
     let mut list_state = ListState::default();
-    if !state.lines[start..].is_empty() {
-        list_state.select(Some(state.lines[start..].len() - 1));
+    if !state.lines[start..end].is_empty() {
+        list_state.select(Some(end - start - 1));
     }
     f.render_stateful_widget(list, inner, &mut list_state);
 }

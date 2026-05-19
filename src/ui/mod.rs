@@ -106,16 +106,16 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         (Mode::Browse, _) => " [j/k] move   [enter] ssh   [r] run cmd   [s] services   [p] processes   [h] health   [v] vultr   [m] money   [l] logs   [a] shortcuts   [c] agent tail   [q] quit ",
         (Mode::Runner, Some(InputFocus::Password)) => " typing password — [enter] submit   [esc] cancel ",
         (Mode::Runner, Some(InputFocus::Command)) => " typing command — [enter] run   [esc] back ",
-        (Mode::Runner, None) => " [r] new cmd   [esc] back ",
-        (Mode::Services, _) => " [r] refresh   [esc] back ",
+        (Mode::Runner, None) => " [j/k] scroll   [pgup/pgdn] page   [g/G] top/bottom   [r] new cmd   [esc] back ",
+        (Mode::Services, _) => " [j/k] scroll   [pgup/pgdn] page   [g/G] top/bottom   [r] refresh   [esc] back ",
         (Mode::Shortcuts, _) => " press a shortcut key   [esc] cancel ",
-        (Mode::AgentTail, _) => " [esc] back to browse ",
-        (Mode::Processes, _) => " [r] refresh   [esc] back ",
-        (Mode::Health, _) => " [r] refresh   [esc] back ",
-        (Mode::Vultr, _) => " [r] refresh   [esc] back ",
+        (Mode::AgentTail, _) => " [j/k] scroll   [pgup/pgdn] page   [g/G] top/bottom   [esc] back ",
+        (Mode::Processes, _) => " [j/k] scroll   [pgup/pgdn] page   [r] refresh   [esc] back ",
+        (Mode::Health, _) => " [j/k] scroll   [pgup/pgdn] page   [r] refresh   [esc] back ",
+        (Mode::Vultr, _) => " [j/k] scroll   [pgup/pgdn] page   [r] refresh   [esc] back ",
         (Mode::Money, _) => " [r] refresh   [esc] back ",
         (Mode::LogPicker, _) => " press a log key   [esc] cancel ",
-        (Mode::LogTail, _) => " [esc] kill tail + back ",
+        (Mode::LogTail, _) => " [j/k] scroll   [pgup/pgdn] page   [g/G] top/bottom   [esc] kill tail + back ",
     };
 
     let line = if app.status.is_empty() {

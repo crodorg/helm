@@ -50,19 +50,17 @@ fn draw_output(f: &mut Frame, area: Rect, app: &App) {
         })
         .collect();
 
-    // Scroll: keep the last N lines visible. Compute offset from total.
+    // Scroll: ScrollState owns the offset; renderer call to render_start
+    // clamps + auto-detects bottom. Paragraph.scroll wants rows from the
+    // top, so we feed it the start row directly.
     let inner_h = area.height.saturating_sub(2) as usize;
     let total = lines.len();
-    let scroll = if total > inner_h {
-        (total - inner_h) as u16
-    } else {
-        0
-    };
+    let start = app.runner.scroll.render_start(total, inner_h);
 
     let p = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: false })
-        .scroll((scroll, 0));
+        .scroll((start as u16, 0));
     f.render_widget(p, area);
 }
 

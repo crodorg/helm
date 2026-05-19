@@ -43,7 +43,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
         .split(inner);
 
     draw_header(f, chunks[0]);
-    draw_body(f, chunks[1], cache);
+    draw_body(f, chunks[1], app, cache);
 }
 
 fn draw_header(f: &mut Frame, area: Rect) {
@@ -72,14 +72,18 @@ fn header_cell(s: &str) -> Span<'static> {
     )
 }
 
-fn draw_body(f: &mut Frame, area: Rect, cache: &VultrCache) {
-    let items: Vec<ListItem> = cache
+fn draw_body(f: &mut Frame, area: Rect, app: &App, cache: &VultrCache) {
+    let all_items: Vec<ListItem> = cache
         .instances
         .iter()
         .map(|inst| instance_row(inst, cache.cost_for(&inst.plan)))
         .collect();
-    let list = List::new(items);
-    f.render_widget(list, area);
+    let total = all_items.len();
+    let viewport = area.height as usize;
+    let start = app.vultr_scroll.render_start(total, viewport);
+    let end = (start + viewport).min(total);
+    let visible: Vec<ListItem> = all_items.into_iter().skip(start).take(end - start).collect();
+    f.render_widget(List::new(visible), area);
 }
 
 fn instance_row<'a>(inst: &Instance, cost: Option<f32>) -> ListItem<'a> {
