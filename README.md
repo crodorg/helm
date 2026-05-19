@@ -129,6 +129,7 @@ Browse:
 - `c` — agent tail
 - `?` — in-TUI help (key list for the current pane; works from any non-text-input mode)
 - `R` — refresh-all overlays (re-fires vultr + buyvm + money + postmark + dns + health in one shot)
+- `F5` — reload `config.toml` (re-merges ssh_config; clamps selected host if list shrank)
 - `q` / `Esc` — quit
 
 Runner (typing command):
@@ -284,4 +285,4 @@ In rough order:
 18. ~~Refresh-all key — single keypress that re-fires vultr + buyvm + money + postmark + dns + health together (currently 6 separate `r` presses across panes)~~ — done (`R` from Browse)
 19. ~~Money pane: per-business filter — `f` to filter Mercury rows by the configured `mercury_account_id` mapping~~ — done (`f` cycles through eligible businesses; narrows both Mercury and Stripe Connect rows)
 20. ~~Vultr action toast — render action results inline in the `v` pane instead of the global status line so context is preserved~~ — done (color-coded toast at the bottom of the `v` pane; cleared on `Esc`)
-21. Runtime config reload — `R` from Browse re-reads `config.toml` without quitting helm
+21. ~~Runtime config reload — `R` from Browse re-reads `config.toml` without quitting helm~~ — done (`F5` from Browse; `R` was already refresh-all overlays)

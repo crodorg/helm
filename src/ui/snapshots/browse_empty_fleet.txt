@@ -13,4 +13,4 @@
 │                          ││                                                  │
 │                          ││                                                  │
 └──────────────────────────┘└──────────────────────────────────────────────────┘
- [j/k] move   [enter] ssh   [r] run cmd   [R] refresh-all overlays   [s] service
+ [j/k] move   [enter] ssh   [r] run cmd   [R] refresh-all overlays   [F5] reload

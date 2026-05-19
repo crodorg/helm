@@ -1878,6 +1878,51 @@ impl App {
         }
     }
 
+    /// Re-read `config.toml` (cwd → XDG fallback) and re-merge ssh
+    /// hosts into the live config. Selected index is clamped so a
+    /// shrinking host list doesn't panic the renderer. Used by Browse
+    /// `F5`. Errors land in the status line and the previous config
+    /// stays intact so a typo'd reload doesn't blow away a live session.
+    pub fn reload_config(&mut self) {
+        let mut new_cfg = match Config::load() {
+            Ok(c) => c,
+            Err(e) => {
+                self.status = format!("config reload failed: {e}");
+                return;
+            }
+        };
+        if new_cfg.ssh_config.enabled {
+            let path = new_cfg
+                .ssh_config
+                .path
+                .clone()
+                .or_else(crate::ssh::sshconfig::default_config_path);
+            if let Some(p) = path {
+                if p.exists() {
+                    match crate::ssh::sshconfig::load_from(&p) {
+                        Ok(hs) => new_cfg.merge_ssh_hosts(hs),
+                        Err(e) => {
+                            tracing::warn!(
+                                "config reload: ssh_config {} parse failed: {e}",
+                                p.display()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        let hosts = new_cfg.hosts.len();
+        let businesses = new_cfg.businesses.len();
+        self.config = new_cfg;
+        if self.selected >= self.config.hosts.len() {
+            self.selected = self.config.hosts.len().saturating_sub(1);
+        }
+        // Drop the money filter — its index referred to the previous
+        // businesses list and is no longer meaningful.
+        self.money_filter = None;
+        self.status = format!("config reloaded: {hosts} hosts, {businesses} businesses");
+    }
+
     /// Re-fire every background fetch in one shot — vultr, buyvm, money,
     /// postmark, dns, health. Each underlying start_* guards its own
     /// preconditions (missing env var, empty businesses list), so this

@@ -6,6 +6,7 @@
 │               │ [enter]  ssh                                 │               │
 │               │ [r]      run cmd                             │               │
 │               │ [R]      refresh-all overlays                │               │
+│               │ [F5]     reload config.toml                  │               │
 │               │ [s]      services                            │               │
 │               │ [p]      processes                           │               │
 │               │ [h]      health                              │               │
@@ -15,6 +16,5 @@
 │               │ [l]      logs                                │               │
 │               │ [t]      history                             │               │
 │               │ [d]      dns                                 │               │
-│               │ [a]      shortcuts                           │               │
 └───────────────└──────────────────────────────────────────────┘───────────────┘
  [?] close   [esc] close
