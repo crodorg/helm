@@ -613,6 +613,15 @@ pub struct App {
 
     pub dns_pane: Option<DnsState>,
 
+    /// Postmark stats keyed by business name. Inserted as each thread's
+    /// result arrives so the Browse detail can render partial data.
+    pub postmark_results:
+        std::collections::HashMap<String, Result<crate::postmark::PostmarkStats, String>>,
+    /// Live receiver while a fetch is in flight. None when no fetch has
+    /// started, or after the last result has been drained.
+    pub postmark_rx: Option<Receiver<crate::postmark::PostmarkResult>>,
+    pub postmark_fetch_attempted: bool,
+
     // agent-as-operator state
     pub jobs_rx: Option<Receiver<Job>>,
     pub agent_history: Vec<AgentHistoryEntry>,
@@ -666,6 +675,9 @@ impl App {
             log_tail: None,
             history_pane: None,
             dns_pane: None,
+            postmark_results: std::collections::HashMap::new(),
+            postmark_rx: None,
+            postmark_fetch_attempted: false,
             jobs_rx: None,
             agent_history: Vec::new(),
             agent_active: None,
@@ -1462,6 +1474,37 @@ impl App {
     pub fn history_prev(&mut self) {
         if let Some(s) = self.history_pane.as_mut() {
             s.selected = s.selected.saturating_sub(1);
+        }
+    }
+
+    /// Fire one Postmark fetch per business that supplies a server token.
+    /// Idempotent: re-firing replaces any in-flight receiver but keeps
+    /// already-resolved results in the cache so the UI doesn't blink.
+    pub fn start_postmark_fetch(&mut self) {
+        self.postmark_fetch_attempted = true;
+        let rx = crate::postmark::spawn_postmark_fetch(&self.config.businesses);
+        self.postmark_rx = Some(rx);
+    }
+
+    pub fn ingest_postmark_events(&mut self) {
+        let Some(rx) = self.postmark_rx.as_ref() else {
+            return;
+        };
+        let mut all_done = false;
+        loop {
+            match rx.try_recv() {
+                Ok(res) => {
+                    self.postmark_results.insert(res.business_name, res.outcome);
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    all_done = true;
+                    break;
+                }
+            }
+        }
+        if all_done {
+            self.postmark_rx = None;
         }
     }
 

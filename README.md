@@ -37,6 +37,7 @@ v0.1 ships:
 - Press `h` → health pane: per business, runs local `curl` (HTTP status + ms) and `openssl s_client | openssl x509` (TLS expiry) against `primary_domain`; rows fill in as probes return, colored red <14d / yellow <30d / green otherwise
 - Press `v` → vultr pane: shells out to `curl` against `GET /v2/instances` + `/v2/plans` (set `VULTR_API_KEY`); table shows label / region / plan / $/mo / status / power / IP; Browse detail pane gets a `vultr` line for any host whose `hostname` matches a Vultr `main_ip`
 - Press `m` → money pane: shells out to `stripe-pp-cli balance` + `mercury-pp-cli accounts` in parallel (each CLI handles its own auth via `STRIPE_SECRET_KEY` / `MERCURY_BEARER_AUTH`); Stripe block shows available / pending / total, Mercury table lists each account with current + available balance and a row-1 total. Each `[[businesses]]` may set `stripe_account_id` + `mercury_account_id` — the matching slice renders inline under the business bullet on the Browse detail panel, and the money fetch fires eagerly on startup when any linkage exists
+- Postmark stats overlay: `[[businesses]]` may set `postmark_server_token` — helm fires `curl` against `https://api.postmarkapp.com/stats/outbound` (last 30 days UTC) on startup; token rides in `X-Postmark-Server-Token` via curl's `-H @-` stdin so it stays out of argv. Sent / bounced (+ rate) / spam (+ rate) render inline on the Browse detail panel
 - Press `l` → log picker: built-in defaults (messages / daemon / authlog) plus any `[[logs]]` from config that match the selected host; single-char key launches `ssh -tt <alias> tail -n 200 -f <path>` streaming live into a scrolling pane (capped at 5000 lines); Esc kills the tail and returns to Browse
 - Press `t` → history pane: most-recent 200 runs from `state.db` (agent + operator combined) in a scrolling table — relative time, source, alias, exit code, duration, command; `j/k` to move, Enter to load the selected command back into the runner against the original host for one-key replay/edit
 - Press `d` → dns pane: per business, shells `drill -Q <domain> {A,AAAA,MX,CAA}` (prefers `drill`, falls back to `dig +short`); table shows VERDICT (MATCH / MISMATCH / ? / ERROR) based on whether the A set contains the host's `hostname` (when that hostname is an IP literal), plus full AAAA/MX/CAA detail lines underneath
@@ -134,6 +135,7 @@ src/
 │   └── dns.rs            drill/dig wrapper + A-vs-expected-IP verdict
 ├── vultr.rs              GET /v2/instances + /v2/plans via curl + serde_json
 ├── money.rs              stripe-pp-cli + mercury-pp-cli shell-out + parsers
+├── postmark.rs           curl + Postmark /stats/outbound parser (token via stdin)
 ├── history.rs            rusqlite-bundled HistoryStore: runs + run_lines tables
 └── ui/
     ├── mod.rs            mode router, header, footer
@@ -234,7 +236,7 @@ In rough order:
 8. ~~Runner history pane — keybind that opens a list of past runs from `state.db`, sorted by host/recency, with one-key replay~~ — done
 9. ~~Per-business Stripe + Mercury linkage — map each `[[businesses]]` to one Stripe account + one Mercury account; render its slice on the business detail panel instead of one fleet-wide block~~ — done (Mercury renders per-account balance inline; Stripe shows a linkage badge — per-Connect-account balance is a follow-up)
 10. ~~DNS sanity check — for each business `primary_domain`, resolve A/AAAA + MX + CAA and surface mismatches against the host's known public IP~~ — done
-11. Postmark stats overlay — per-business send / bounce / spam-complaint counts via Postmark's stats API
+11. ~~Postmark stats overlay — per-business send / bounce / spam-complaint counts via Postmark's stats API~~ — done
 12. BuyVM Stallion panel — same shape as the Vultr pane but against BuyVM's Stallion API
 13. Vultr actions — reboot / stop / start / snapshot from the Vultr pane (with a confirm modal — these are irreversible)
 14. `helm auth` subcommand — one-shot bootstrap that loads the VPS key into `ssh-agent`, verifies fingerprints across all hosts, and exits 0 / non-zero so it can be wired into login shells or doas wrappers

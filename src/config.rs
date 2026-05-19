@@ -151,6 +151,14 @@ pub struct Business {
     /// current balance from the money cache and renders it inline.
     #[serde(default)]
     pub mercury_account_id: Option<String>,
+    /// Optional Postmark server token (per Postmark "server", i.e. per
+    /// business). When set, helm fires a stats fetch on startup and the
+    /// Browse detail panel renders last-30-day Sent / Bounced / Spam
+    /// counts. The token lives in `config.toml` (gitignored); for
+    /// portfolios prefer leaving it unset and shipping the field as
+    /// documentation only.
+    #[serde(default)]
+    pub postmark_server_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -48,6 +48,13 @@ notes = "Marketing site"
 #                      renders inline.
 # stripe_account_id = "acct_1NxxxYYY"
 # mercury_account_id = "abc-123-mercury-uuid"
+# postmark_server_token = "your-postmark-server-token"
+#   ↑ when set, helm fires `curl` against Postmark's /stats/outbound on
+#     startup and renders sent / bounced / spam counts for the last 30 days
+#     inline under the business bullet. Token rides in
+#     X-Postmark-Server-Token via curl's `-H @-` (never on argv).
+#     config.toml is gitignored — but for portfolios prefer leaving the
+#     field unset entirely.
 
 # SSH config auto-discovery. Defaults: enabled, ~/.ssh/config, no ignore list.
 # Aliases listed in `ignore` are dropped from the merged host list (useful for

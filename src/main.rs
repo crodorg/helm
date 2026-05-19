@@ -4,6 +4,7 @@ mod history;
 mod inventory;
 mod ipc;
 mod money;
+mod postmark;
 mod ssh;
 mod tmux;
 mod ui;
@@ -302,6 +303,16 @@ fn run_tui() -> Result<()> {
     if any_money_linkage {
         app.start_money_fetch();
     }
+    // Same pattern for Postmark — fire on startup if any business sets a
+    // token, so the Browse detail panel populates without operator action.
+    let any_postmark = app
+        .config
+        .businesses
+        .iter()
+        .any(|b| b.postmark_server_token.is_some());
+    if any_postmark {
+        app.start_postmark_fetch();
+    }
 
     // IPC server — bind socket, hand jobs to the App via mpsc. `_guard`
     // lives until the end of run_tui so its Drop removes the socket file
@@ -354,6 +365,7 @@ fn run(terminal: &mut Term, app: &mut App) -> Result<()> {
         app.ingest_vultr_events();
         app.ingest_money_events();
         app.ingest_dns_events();
+        app.ingest_postmark_events();
         app.ingest_log_tail_events();
         app.ingest_jobs();
         app.ingest_agent_events();

@@ -127,6 +127,7 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
                         ),
                     ]));
                     push_money_lines(&mut v, b, app);
+                    push_postmark_lines(&mut v, b, app);
                 }
             }
             v
@@ -182,6 +183,31 @@ fn push_money_lines(v: &mut Vec<Line<'static>>, b: &crate::config::Business, app
         };
         v.push(money_line("stripe", &stripe_status, Color::Magenta));
     }
+}
+
+/// Render a single Postmark line per business when a token is configured.
+/// Handles three states: not-yet-fetched, error, and success. Renders
+/// nothing when the business has no token.
+pub fn push_postmark_lines(v: &mut Vec<Line<'static>>, b: &crate::config::Business, app: &App) {
+    if b.postmark_server_token.is_none() {
+        return;
+    }
+    let body = match app.postmark_results.get(&b.name) {
+        Some(Ok(s)) => format!(
+            "{} sent  {} bounced ({:.1}%)  {} spam ({:.1}%)   {}→{}",
+            s.sent, s.bounced, s.bounce_rate, s.spam_complaints, s.spam_rate,
+            s.from_date, s.to_date,
+        ),
+        Some(Err(e)) => format!("error: {e}"),
+        _ if app.postmark_rx.is_some() => "(fetching…)".to_string(),
+        _ if app.postmark_fetch_attempted => "(no result — token may be empty)".to_string(),
+        _ => "(pending — press refresh)".to_string(),
+    };
+    let color = match app.postmark_results.get(&b.name) {
+        Some(Err(_)) => Color::Red,
+        _ => Color::Yellow,
+    };
+    v.push(money_line("postmark", &body, color));
 }
 
 fn money_line(label: &str, body: &str, accent: Color) -> Line<'static> {
