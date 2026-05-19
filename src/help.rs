@@ -207,9 +207,10 @@ const DNS: [Binding; 5] = [
     b("esc", "back"),
 ];
 
-const HELP: [Binding; 2] = [
+const HELP: [Binding; 3] = [
     b("?", "close"),
     b("esc", "close"),
+    b("q", "close"),
 ];
 
 #[cfg(test)]
