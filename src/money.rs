@@ -48,6 +48,12 @@ pub struct MoneyCache {
 }
 
 impl MoneyCache {
+    /// Find a Mercury account by id (exact match). Used by per-business
+    /// linkage rendering in the Browse detail panel.
+    pub fn mercury_for_id(&self, id: &str) -> Option<&MercuryAccount> {
+        self.mercury.iter().find(|a| a.id == id)
+    }
+
     pub fn mercury_total(&self, field: BalanceField) -> Option<f64> {
         if self.mercury.is_empty() {
             return None;
@@ -355,6 +361,19 @@ mod tests {
     fn mercury_totals_none_when_empty() {
         let cache = MoneyCache::default();
         assert_eq!(cache.mercury_total(BalanceField::Current), None);
+    }
+
+    #[test]
+    fn mercury_for_id_returns_match_or_none() {
+        let cache = MoneyCache {
+            mercury: parse_mercury_accounts(MERCURY_ACCOUNTS_FIXTURE).unwrap(),
+            ..Default::default()
+        };
+        let acc = cache.mercury_for_id("acc-2").expect("found");
+        assert_eq!(acc.name, "Tax Savings");
+        assert_eq!(acc.available_balance, 50000.0);
+        assert!(cache.mercury_for_id("nope").is_none());
+        assert!(cache.mercury_for_id("").is_none());
     }
 
     #[test]

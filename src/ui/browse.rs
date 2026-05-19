@@ -126,6 +126,7 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
                             Style::default().fg(Color::Cyan),
                         ),
                     ]));
+                    push_money_lines(&mut v, b, app);
                 }
             }
             v
@@ -142,5 +143,54 @@ fn kv(k: &str, v: &str) -> Line<'static> {
             Style::default().fg(Color::DarkGray),
         ),
         Span::raw(v.to_string()),
+    ])
+}
+
+/// Render at most two indented lines per business — Mercury balance (if
+/// linked + cache loaded) and a Stripe linkage badge (if id set). Caller
+/// supplies the parent line vector.
+fn push_money_lines(v: &mut Vec<Line<'static>>, b: &crate::config::Business, app: &App) {
+    let cache = match app.money_cache.as_ref() {
+        Some(c) => c,
+        _ => {
+            // No cache yet: show a placeholder only if any linkage is set,
+            // so the user knows the row is intentional and pending.
+            if b.stripe_account_id.is_some() || b.mercury_account_id.is_some() {
+                v.push(money_line("money", "(fetching… press m to force)", Color::DarkGray));
+            }
+            return;
+        }
+    };
+    if let Some(id) = b.mercury_account_id.as_ref() {
+        let label = match cache.mercury_for_id(id) {
+            Some(acc) => format!(
+                "{} — avail ${:.2}  curr ${:.2}",
+                acc.name, acc.available_balance, acc.current_balance
+            ),
+            _ => format!("(mercury id '{id}' not in account list)"),
+        };
+        v.push(money_line("mercury", &label, Color::Green));
+    }
+    if let Some(id) = b.stripe_account_id.as_ref() {
+        let stripe_status = match (&cache.stripe, &cache.stripe_error) {
+            (Some(s), _) => format!(
+                "linked {id} — fleet ${:.2} avail (Connect per-account view TBD)",
+                s.available_cents as f64 / 100.0
+            ),
+            (_, Some(e)) => format!("linked {id} — fleet fetch error: {e}"),
+            _ => format!("linked {id} — fleet snapshot pending"),
+        };
+        v.push(money_line("stripe", &stripe_status, Color::Magenta));
+    }
+}
+
+fn money_line(label: &str, body: &str, accent: Color) -> Line<'static> {
+    Line::from(vec![
+        Span::raw("      "),
+        Span::styled(
+            format!("{:<8}", label),
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(body.to_string()),
     ])
 }

@@ -291,6 +291,17 @@ fn run_tui() -> Result<()> {
         Err(e) => eprintln!("helm: warning — could not open history db: {e}"),
     }
     app.start_vultr_fetch();
+    // Eager money fetch when any business declares Stripe/Mercury linkage,
+    // so the Browse detail panel renders balances without forcing the
+    // operator to press `m` first.
+    let any_money_linkage = app
+        .config
+        .businesses
+        .iter()
+        .any(|b| b.stripe_account_id.is_some() || b.mercury_account_id.is_some());
+    if any_money_linkage {
+        app.start_money_fetch();
+    }
 
     // IPC server — bind socket, hand jobs to the App via mpsc. `_guard`
     // lives until the end of run_tui so its Drop removes the socket file

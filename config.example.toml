@@ -35,6 +35,19 @@ host = "web"
 repo_path = "/home/admin/sites/example"
 deploy_cmd = "doas rcctl restart httpd"
 notes = "Marketing site"
+# Optional money linkage. When set, the Browse detail panel pulls this
+# business's slice from the money cache and renders it inline under the
+# business bullet. Helm fires the money fetch eagerly on startup when any
+# business has either field populated.
+#   stripe_account_id  Stripe Connect connected-account id (acct_…). Per-
+#                      account balance fetch is a follow-up — for now the
+#                      panel just labels the business as Stripe-linked and
+#                      shows the fleet-wide available balance.
+#   mercury_account_id Mercury account id from `mercury-pp-cli accounts`.
+#                      The matching account's available + current balance
+#                      renders inline.
+# stripe_account_id = "acct_1NxxxYYY"
+# mercury_account_id = "abc-123-mercury-uuid"
 
 # SSH config auto-discovery. Defaults: enabled, ~/.ssh/config, no ignore list.
 # Aliases listed in `ignore` are dropped from the merged host list (useful for

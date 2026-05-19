@@ -140,6 +140,17 @@ pub struct Business {
     pub deploy_cmd: String,
     #[serde(default)]
     pub notes: String,
+    /// Optional Stripe Connect account id (e.g. `acct_1NxxxYYY`). When
+    /// set, the Browse detail panel labels this business as Stripe-linked.
+    /// Per-account balance fetch is deferred — the `m` pane still shows
+    /// the fleet-wide Stripe view.
+    #[serde(default)]
+    pub stripe_account_id: Option<String>,
+    /// Optional Mercury account id from `mercury-pp-cli accounts`. When
+    /// set, the Browse detail panel pulls this account's available +
+    /// current balance from the money cache and renders it inline.
+    #[serde(default)]
+    pub mercury_account_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
