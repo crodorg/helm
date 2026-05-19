@@ -252,6 +252,13 @@ cargo test
 cargo clippy --no-deps --all-targets -- -D warnings
 ```
 
+TUI snapshot tests live under `src/ui/snapshots.rs`. Each test renders a pane through `ratatui::backend::TestBackend` and diffs the cell grid against a fixture in `src/ui/snapshots/*.txt`. When a UI change is intentional:
+
+```sh
+HELM_UPDATE_SNAPSHOTS=1 cargo test ui::snapshots
+git diff src/ui/snapshots/    # review re-baselined fixtures before committing
+```
+
 ## Roadmap
 
 In rough order:
@@ -272,7 +279,7 @@ In rough order:
 14. ~~`helm auth` subcommand — one-shot bootstrap that loads the VPS key into `ssh-agent`, verifies fingerprints across all hosts, and exits 0 / non-zero so it can be wired into login shells or doas wrappers~~ — done
 15. ~~In-TUI help menu — `?` from any mode opens a modal palette listing every key binding for the current pane (fzf-style)~~ — done
 16. ~~Per-Connect Stripe balance — extend `stripe-pp-cli` shell-out with `--stripe-account acct_…` so each business's detail line shows its own slice instead of the fleet-wide total~~ — done
-17. TUI snapshot tests — render ratatui buffers into strings, diff against fixtures; catches UI regressions without manual smoke
+17. ~~TUI snapshot tests — render ratatui buffers into strings, diff against fixtures; catches UI regressions without manual smoke~~ — done
 18. Refresh-all key — single keypress that re-fires vultr + buyvm + money + postmark + dns + health together (currently 6 separate `r` presses across panes)
 19. Money pane: per-business filter — `f` to filter Mercury rows by the configured `mercury_account_id` mapping
 20. Vultr action toast — render action results inline in the `v` pane instead of the global status line so context is preserved

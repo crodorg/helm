@@ -12,6 +12,8 @@ mod processes;
 mod runner;
 mod services;
 mod shortcuts;
+#[cfg(test)]
+mod snapshots;
 mod vultr;
 
 use ratatui::{

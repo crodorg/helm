@@ -1,0 +1,20 @@
+ helm    help    🤖  idle (0)
+┌hosts──────────┌ keys › browse ───────────────────────────────┐───────────────┐
+│               │press [?] or [esc] to close                   │ample.toml     │
+│               │                                              │               │
+│               │ [j/k]    move                                │               │
+│               │ [enter]  ssh                                 │               │
+│               │ [r]      run cmd                             │               │
+│               │ [s]      services                            │               │
+│               │ [p]      processes                           │               │
+│               │ [h]      health                              │               │
+│               │ [v]      vultr                               │               │
+│               │ [b]      buyvm                               │               │
+│               │ [m]      money                               │               │
+│               │ [l]      logs                                │               │
+│               │ [t]      history                             │               │
+│               │ [d]      dns                                 │               │
+│               │ [a]      shortcuts                           │               │
+│               │ [c]      agent tail                          │               │
+└───────────────└──────────────────────────────────────────────┘───────────────┘
+ [?] close   [esc] close
