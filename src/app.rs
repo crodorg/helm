@@ -261,6 +261,34 @@ fn spawn_health_state(businesses: &[crate::config::Business]) -> HealthState {
     }
 }
 
+/// Build a per-business `expected_ip` vector by joining each business's
+/// `host` field to its `[[hosts]]` entry's `hostname`. The verdict logic
+/// only acts on values that parse as `IpAddr`, so DNS-name hostnames are
+/// passed through and naturally land at `Unknown`.
+fn spawn_dns_state(config: &crate::config::Config) -> DnsState {
+    let business_names: Vec<String> =
+        config.businesses.iter().map(|b| b.name.clone()).collect();
+    let expected_ips: Vec<Option<String>> = config
+        .businesses
+        .iter()
+        .map(|b| {
+            config
+                .hosts
+                .iter()
+                .find(|h| h.name == b.host)
+                .map(|h| h.display_hostname().to_string())
+        })
+        .collect();
+    let rows = vec![None; config.businesses.len()];
+    let rx = crate::inventory::dns::spawn_dns(&config.businesses, &expected_ips);
+    DnsState {
+        rx,
+        rows,
+        business_names,
+        scroll: ScrollState::new_top(),
+    }
+}
+
 fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
@@ -285,6 +313,20 @@ pub enum Mode {
     LogPicker,
     LogTail,
     History,
+    Dns,
+}
+
+pub struct DnsState {
+    pub rx: Receiver<crate::inventory::dns::DnsResult>,
+    pub rows: Vec<Option<crate::inventory::dns::DnsCheck>>,
+    pub business_names: Vec<String>,
+    pub scroll: ScrollState,
+}
+
+impl DnsState {
+    pub fn pending_count(&self) -> usize {
+        self.rows.iter().filter(|r| r.is_none()).count()
+    }
 }
 
 pub struct HistoryState {
@@ -569,6 +611,8 @@ pub struct App {
 
     pub history_pane: Option<HistoryState>,
 
+    pub dns_pane: Option<DnsState>,
+
     // agent-as-operator state
     pub jobs_rx: Option<Receiver<Job>>,
     pub agent_history: Vec<AgentHistoryEntry>,
@@ -621,6 +665,7 @@ impl App {
             money_fetch_attempted: false,
             log_tail: None,
             history_pane: None,
+            dns_pane: None,
             jobs_rx: None,
             agent_history: Vec::new(),
             agent_active: None,
@@ -1417,6 +1462,39 @@ impl App {
     pub fn history_prev(&mut self) {
         if let Some(s) = self.history_pane.as_mut() {
             s.selected = s.selected.saturating_sub(1);
+        }
+    }
+
+    pub fn open_dns(&mut self) {
+        if self.config.businesses.is_empty() {
+            self.status = "no businesses configured".into();
+            return;
+        }
+        self.mode = Mode::Dns;
+        self.dns_pane = Some(spawn_dns_state(&self.config));
+    }
+
+    pub fn refresh_dns(&mut self) {
+        if self.dns_pane.is_some() {
+            self.dns_pane = Some(spawn_dns_state(&self.config));
+        }
+    }
+
+    pub fn close_dns(&mut self) {
+        if self.mode == Mode::Dns {
+            self.dns_pane = None;
+            self.mode = Mode::Browse;
+        }
+    }
+
+    pub fn ingest_dns_events(&mut self) {
+        let Some(s) = self.dns_pane.as_mut() else {
+            return;
+        };
+        while let Ok(res) = s.rx.try_recv() {
+            if let Some(slot) = s.rows.get_mut(res.idx) {
+                *slot = Some(res.check);
+            }
         }
     }
 

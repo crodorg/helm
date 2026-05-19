@@ -353,6 +353,7 @@ fn run(terminal: &mut Term, app: &mut App) -> Result<()> {
         app.ingest_health_events();
         app.ingest_vultr_events();
         app.ingest_money_events();
+        app.ingest_dns_events();
         app.ingest_log_tail_events();
         app.ingest_jobs();
         app.ingest_agent_events();
@@ -391,6 +392,7 @@ fn handle_key(app: &mut App, code: KeyCode) {
         Mode::LogPicker => handle_log_picker(app, code),
         Mode::LogTail => handle_log_tail(app, code),
         Mode::History => handle_history(app, code),
+        Mode::Dns => handle_dns(app, code),
     }
 }
 
@@ -451,6 +453,19 @@ fn handle_money(app: &mut App, code: KeyCode) {
     match code {
         KeyCode::Esc => app.close_money(),
         KeyCode::Char('r') => app.refresh_money(),
+        _ => {}
+    }
+}
+
+fn handle_dns(app: &mut App, code: KeyCode) {
+    if let Some(state) = app.dns_pane.as_ref() {
+        if handle_scroll_keys(&state.scroll, code) {
+            return;
+        }
+    }
+    match code {
+        KeyCode::Esc => app.close_dns(),
+        KeyCode::Char('r') => app.refresh_dns(),
         _ => {}
     }
 }
@@ -526,6 +541,7 @@ fn handle_browse(app: &mut App, code: KeyCode) {
         KeyCode::Char('m') => app.open_money(),
         KeyCode::Char('l') => app.open_log_picker(),
         KeyCode::Char('t') => app.open_history(),
+        KeyCode::Char('d') => app.open_dns(),
         KeyCode::Char('a') => app.open_shortcuts(),
         KeyCode::Char('c') => app.open_agent_tail(),
         _ => {}

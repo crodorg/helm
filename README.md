@@ -39,6 +39,7 @@ v0.1 ships:
 - Press `m` → money pane: shells out to `stripe-pp-cli balance` + `mercury-pp-cli accounts` in parallel (each CLI handles its own auth via `STRIPE_SECRET_KEY` / `MERCURY_BEARER_AUTH`); Stripe block shows available / pending / total, Mercury table lists each account with current + available balance and a row-1 total. Each `[[businesses]]` may set `stripe_account_id` + `mercury_account_id` — the matching slice renders inline under the business bullet on the Browse detail panel, and the money fetch fires eagerly on startup when any linkage exists
 - Press `l` → log picker: built-in defaults (messages / daemon / authlog) plus any `[[logs]]` from config that match the selected host; single-char key launches `ssh -tt <alias> tail -n 200 -f <path>` streaming live into a scrolling pane (capped at 5000 lines); Esc kills the tail and returns to Browse
 - Press `t` → history pane: most-recent 200 runs from `state.db` (agent + operator combined) in a scrolling table — relative time, source, alias, exit code, duration, command; `j/k` to move, Enter to load the selected command back into the runner against the original host for one-key replay/edit
+- Press `d` → dns pane: per business, shells `drill -Q <domain> {A,AAAA,MX,CAA}` (prefers `drill`, falls back to `dig +short`); table shows VERDICT (MATCH / MISMATCH / ? / ERROR) based on whether the A set contains the host's `hostname` (when that hostname is an IP literal), plus full AAAA/MX/CAA detail lines underneath
 - SQLite history cache at `$XDG_DATA_HOME/helm/state.db` persists every `helm exec` (agent) and Runner (operator) command across helm restarts; AgentTail rehydrates the last 100 agent runs on startup so the transcript survives
 - Doas / sudo / ssh-passphrase prompts trigger a centered password modal; submitted password is piped to the remote stdin and never persisted
 - `helm shell open <alias>` (CLI subcommand) attaches a terminal to a persistent tmux session on the remote VPS — sessions survive helm restarts and network drops; `helm shell send / read / list / close` drive the same session for scripted or AI-assisted workflows
@@ -95,6 +96,7 @@ Browse:
 - `m` — money pane (needs `stripe-pp-cli` + `mercury-pp-cli` auth)
 - `l` — logs picker (built-in defaults + `[[logs]]` from config)
 - `t` — history pane (past `helm exec` + Runner runs from `state.db`; Enter replays into the runner)
+- `d` — dns pane (per-business A/AAAA/MX/CAA, verdict vs the host's IP)
 - `a` — shortcuts palette
 - `c` — agent tail
 - `q` / `Esc` — quit
@@ -128,7 +130,8 @@ src/
 │   ├── services.rs       rcctl ls parser
 │   ├── processes.rs      ps parser
 │   ├── ports.rs          netstat parser
-│   └── health.rs         curl + openssl x509 parsers + local probe runner
+│   ├── health.rs         curl + openssl x509 parsers + local probe runner
+│   └── dns.rs            drill/dig wrapper + A-vs-expected-IP verdict
 ├── vultr.rs              GET /v2/instances + /v2/plans via curl + serde_json
 ├── money.rs              stripe-pp-cli + mercury-pp-cli shell-out + parsers
 ├── history.rs            rusqlite-bundled HistoryStore: runs + run_lines tables
@@ -143,7 +146,8 @@ src/
     ├── money.rs          Stripe block + Mercury accounts table
     ├── log_picker.rs     modal palette: keyed shortcuts → tail paths
     ├── log_tail.rs       scrolling pane that auto-sticks to the latest line
-    └── history.rs        run-history table (replay on Enter)
+    ├── history.rs        run-history table (replay on Enter)
+    └── dns.rs            per-business A/AAAA/MX/CAA table
 ```
 
 ## Money pane / pp CLIs
@@ -229,7 +233,7 @@ In rough order:
 7. ~~SQLite history cache (persists agent + operator runs; rehydrates AgentTail on startup)~~ — done
 8. ~~Runner history pane — keybind that opens a list of past runs from `state.db`, sorted by host/recency, with one-key replay~~ — done
 9. ~~Per-business Stripe + Mercury linkage — map each `[[businesses]]` to one Stripe account + one Mercury account; render its slice on the business detail panel instead of one fleet-wide block~~ — done (Mercury renders per-account balance inline; Stripe shows a linkage badge — per-Connect-account balance is a follow-up)
-10. DNS sanity check — for each business `primary_domain`, resolve A/AAAA + MX + CAA and surface mismatches against the host's known public IP
+10. ~~DNS sanity check — for each business `primary_domain`, resolve A/AAAA + MX + CAA and surface mismatches against the host's known public IP~~ — done
 11. Postmark stats overlay — per-business send / bounce / spam-complaint counts via Postmark's stats API
 12. BuyVM Stallion panel — same shape as the Vultr pane but against BuyVM's Stallion API
 13. Vultr actions — reboot / stop / start / snapshot from the Vultr pane (with a confirm modal — these are irreversible)
