@@ -81,7 +81,7 @@ ssh-add ~/.ssh/id_ed25519        # if not already loaded
 If you build from source in a checkout outside your `$PATH` (e.g. `~/.local/src/helm`), symlink the release binary into a bin dir you already have on `$PATH`:
 
 ```sh
-ln -s ~/.local/src/helm/target/release/helm ~/dotfiles/bin/helm
+ln -s ~/.local/src/helm/target/release/helm ~/.local/bin/helm
 ```
 
 Rebuilds (`cargo build --release`) update the symlink target in place — no re-copy needed. Drop your `config.toml` once into `~/.config/helm/config.toml` and `helm` works from any cwd.
