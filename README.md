@@ -20,7 +20,7 @@ Probably not, and that's fine — this is a personal tool built for one specific
 - **OpenBSD** on the remote side (uses `rcctl`, `doas`, `acme-client`, `tail -f` — no Linux/systemd/journalctl).
 - **`~/.ssh/config` + loaded `ssh-agent`** as the only auth path. Helm never reads private keys and has no passphrase UI.
 - A small **fleet sized for one human's mental cache** — tens of hosts, not hundreds. No multi-tenant auth, no RBAC, no audit log.
-- The **money pane talks to two CLIs (`stripe-pp-cli`, `mercury-pp-cli`) that ship with the author's private toolkit** — they are not on the public internet. You can wire your own by matching the JSON shape (see [Money pane](#money-pane--pp-clis)). The rest of helm works without them.
+- The **money pane talks to two CLIs (`stripe-pp-cli`, `mercury-pp-cli`) from the open-source [printing-press-library](https://github.com/mvanhorn/printing-press-library)** — install them with `go install` (see [Money pane](#money-pane--pp-clis)). The rest of helm works without them; the pane gracefully degrades when the CLIs are missing.
 
 The code is permissive-licensed (MIT) and small (~5 KLOC). If you run an OpenBSD fleet of similar shape, fork it; if you're here to read how a single-binary Rust TUI ties ssh + tmux + curl + sqlite together, the source is the docs.
 
@@ -145,9 +145,16 @@ src/
 
 ## Money pane / pp CLIs
 
-The money pane (`m`) does not link directly to Stripe or Mercury — it shells out to two CLIs and parses their JSON. The CLIs helm ships against (`stripe-pp-cli`, `mercury-pp-cli`) are private to the author's toolkit and are **not on the public internet**; the pane gracefully degrades to a "(CLI not found)" message when they are missing, so the rest of helm works fine without them.
+The money pane (`m`) does not link directly to Stripe or Mercury — it shells out to two CLIs and parses their JSON. The CLIs are `stripe-pp-cli` and `mercury-pp-cli`, both from the open-source [printing-press-library](https://github.com/mvanhorn/printing-press-library). Install them once:
 
-If you want to wire your own balance source, make a script with the matching name on `$PATH` that prints the JSON shape helm expects.
+```sh
+go install github.com/mvanhorn/printing-press-library/library/payments/stripe/cmd/stripe-pp-cli@latest
+go install github.com/mvanhorn/printing-press-library/library/payments/mercury/cmd/mercury-pp-cli@latest
+```
+
+Make sure `$GOPATH/bin` (or `$GOBIN`) is on `$PATH`. If the CLIs are absent the pane gracefully degrades to a "(CLI not found)" message — the rest of helm keeps working.
+
+You can also bring your own balance source: helm just expects a binary on `$PATH` with the matching name that prints the JSON shape below.
 
 `stripe-pp-cli balance` → matches the [Stripe `/v1/balance` response](https://docs.stripe.com/api/balance):
 
@@ -169,7 +176,7 @@ If you want to wire your own balance source, make a script with the matching nam
 ]}
 ```
 
-Either CLI is responsible for its own auth — helm passes nothing through. The author's CLIs honor `STRIPE_SECRET_KEY` and `MERCURY_BEARER_AUTH` env vars; a one-off wrapper around `curl` + Stripe's REST API will work just as well.
+Either CLI is responsible for its own auth — helm passes nothing through. The printing-press CLIs honor `STRIPE_SECRET_KEY` and `MERCURY_BEARER_AUTH` env vars (see their READMEs); a one-off wrapper around `curl` + Stripe's REST API will work just as well.
 
 ## Driving helm from an AI agent
 
