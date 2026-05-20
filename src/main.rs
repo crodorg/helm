@@ -1,5 +1,6 @@
 mod app;
 mod config;
+mod engine;
 mod help;
 mod history;
 mod inventory;
@@ -42,6 +43,7 @@ fn main() -> std::process::ExitCode {
             "exec" => return run_exec_cli(&argv[2..]),
             "shell" => return run_shell_cli(&argv[2..]),
             "auth" => return run_auth_cli(&argv[2..]),
+            "daemon" => return run_daemon_cli(&argv[2..]),
             "--help" | "-h" | "help" => {
                 print_help();
                 return std::process::ExitCode::SUCCESS;
@@ -70,12 +72,38 @@ fn print_help() {
 usage:
   helm                          launch the TUI
   helm exec <alias> <cmd...>    run a one-shot command on a host through the
-                                running TUI (refuses if no TUI is open)
+                                running daemon (or TUI) over its control
+                                socket
   helm shell <subcommand>       drive a persistent tmux-backed shell session
                                 per VPS (see `helm shell help`)
   helm auth [--load]            verify ssh-agent has every key helm hosts
                                 depend on; exit 0/non-zero (see `helm auth help`)
+  helm daemon [start|stop|status]
+                                run / manage the headless control daemon
+                                (see `helm daemon help`)
   helm help                     this help"
+    );
+}
+
+fn print_daemon_help() {
+    eprintln!(
+        "helm daemon — headless control daemon
+
+The daemon binds helm's control socket and services `helm exec` requests
+so external operators (e.g. AI agents) can drive remote commands while
+your TUI is closed. Only one process — TUI or daemon — owns the socket
+at a time; starting the TUI auto-shuts down a running daemon and
+re-spawns one when the TUI exits.
+
+usage:
+  helm daemon            run in the foreground (logs to stderr); exits
+                         on SIGINT, SIGTERM, or a Shutdown IPC request
+  helm daemon start      spawn a detached daemon and exit once the
+                         socket is reachable
+  helm daemon stop       ask a running daemon to exit cleanly
+  helm daemon status     exit 0 if a daemon (or TUI) is reachable; 1
+                         otherwise. Prints the responder's version.
+  helm daemon help       this help"
     );
 }
 
@@ -425,6 +453,200 @@ fn run_auth_cli(args: &[String]) -> std::process::ExitCode {
     }
 }
 
+fn run_daemon_cli(args: &[String]) -> std::process::ExitCode {
+    let sub = args.first().map(|s| s.as_str()).unwrap_or("");
+    match sub {
+        "" => run_daemon_foreground_cli(),
+        "start" => run_daemon_start_cli(),
+        "stop" => run_daemon_stop_cli(),
+        "status" => run_daemon_status_cli(),
+        "help" | "--help" | "-h" => {
+            print_daemon_help();
+            std::process::ExitCode::SUCCESS
+        }
+        other => {
+            eprintln!("helm daemon: unknown subcommand `{other}`");
+            print_daemon_help();
+            std::process::ExitCode::from(2)
+        }
+    }
+}
+
+fn run_daemon_foreground_cli() -> std::process::ExitCode {
+    match run_daemon_foreground() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("helm daemon: {e}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+/// Headless engine + IPC server loop. Mirrors `run_tui` setup minus the
+/// terminal and the App, then drives a small tokio runtime to multiplex
+/// signal handling with periodic engine ticks.
+fn run_daemon_foreground() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(io::stderr)
+        .init();
+
+    let mut cfg = Config::load()?;
+    let ssh_hosts = load_ssh_hosts_for(&mut cfg);
+    let agent_status = crate::ssh::agent::check(&ssh_hosts);
+    if let Some(msg) = crate::ssh::agent::render_blocker(&agent_status, &ssh_hosts) {
+        eprintln!("{msg}");
+        std::process::exit(1);
+    }
+
+    let mut engine = crate::engine::Engine::new();
+    match history::HistoryStore::open_default() {
+        Ok(store) => engine.attach_history(store, 100),
+        Err(e) => eprintln!("helm: warning — could not open history db: {e}"),
+    }
+
+    let socket = crate::ipc::socket_path();
+    let handles = crate::ipc::server::start(socket.clone())
+        .map_err(|e| anyhow::anyhow!("bind {} failed: {e}", socket.display()))?;
+    eprintln!(
+        "helm daemon: control socket at {}",
+        handles.guard.socket_path.display()
+    );
+    engine.attach_jobs_rx(handles.jobs_rx);
+    let shutdown_rx = handles.shutdown_rx;
+    // Held across the loop so Drop removes the socket file on clean exit.
+    let _socket_guard = handles.guard;
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    rt.block_on(async move {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm = signal(SignalKind::terminate())?;
+        let mut sigint = signal(SignalKind::interrupt())?;
+        let mut tick = tokio::time::interval(Duration::from_millis(100));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = tick.tick() => {
+                    engine.ingest_jobs(None);
+                    engine.ingest_agent_events();
+                    if shutdown_rx.try_recv().is_ok() {
+                        eprintln!("helm daemon: shutdown via IPC");
+                        break;
+                    }
+                }
+                _ = sigterm.recv() => {
+                    eprintln!("helm daemon: SIGTERM");
+                    break;
+                }
+                _ = sigint.recv() => {
+                    eprintln!("helm daemon: SIGINT");
+                    break;
+                }
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })?;
+    Ok(())
+}
+
+fn run_daemon_start_cli() -> std::process::ExitCode {
+    match spawn_detached_daemon() {
+        Ok(pid) => {
+            eprintln!("helm daemon: up (pid {pid})");
+            std::process::ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("helm daemon: start failed: {e}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+/// Fork-exec a detached copy of this binary in `daemon` foreground mode,
+/// then poll the control socket until it answers Ping (up to 3s). Returns
+/// the child PID on success.
+fn spawn_detached_daemon() -> Result<u32> {
+    let socket = crate::ipc::socket_path();
+    if let Some(v) = crate::ipc::client::ping_socket(&socket)? {
+        return Err(anyhow::anyhow!(
+            "another helm process (v{v}) is already bound to {}",
+            socket.display()
+        ));
+    }
+    let exe = std::env::current_exe()?;
+    let mut cmd = Command::new(exe);
+    cmd.arg("daemon")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // Detach into a new session so the daemon survives the spawning shell.
+    use std::os::unix::process::CommandExt;
+    unsafe {
+        cmd.pre_exec(|| {
+            // setsid returns -1 on failure, but only fails if the caller is
+            // already a session leader — harmless for our spawn-fresh case.
+            libc::setsid();
+            Ok(())
+        });
+    }
+    let child = cmd.spawn()?;
+    let pid = child.id();
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while std::time::Instant::now() < deadline {
+        if crate::ipc::client::ping_socket(&socket)?.is_some() {
+            return Ok(pid);
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Err(anyhow::anyhow!(
+        "daemon spawned (pid {pid}) but socket {} didn't come up in 3s",
+        socket.display()
+    ))
+}
+
+fn run_daemon_stop_cli() -> std::process::ExitCode {
+    let socket = crate::ipc::socket_path();
+    if !socket.exists() {
+        eprintln!("helm daemon: not running");
+        return std::process::ExitCode::SUCCESS;
+    }
+    match crate::ipc::client::shutdown_socket(&socket, Duration::from_secs(3)) {
+        Ok(true) => {
+            eprintln!("helm daemon: stopped");
+            std::process::ExitCode::SUCCESS
+        }
+        Ok(false) => {
+            eprintln!("helm daemon: socket still present after 3s");
+            std::process::ExitCode::FAILURE
+        }
+        Err(e) => {
+            eprintln!("helm daemon: stop failed: {e}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_daemon_status_cli() -> std::process::ExitCode {
+    let socket = crate::ipc::socket_path();
+    match crate::ipc::client::ping_socket(&socket) {
+        Ok(Some(v)) => {
+            println!("running (helm v{v}) at {}", socket.display());
+            std::process::ExitCode::SUCCESS
+        }
+        Ok(None) => {
+            println!("not running");
+            std::process::ExitCode::FAILURE
+        }
+        Err(e) => {
+            eprintln!("helm daemon: status check failed: {e}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
 fn run_tui() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -438,6 +660,7 @@ fn run_tui() -> Result<()> {
         eprintln!("{msg}");
         std::process::exit(1);
     }
+    let auto_daemon = cfg.auto_daemon.unwrap_or(true);
     let mut app = App::new(cfg);
     match history::HistoryStore::open_default() {
         Ok(store) => app.attach_history(store, 100),
@@ -466,15 +689,27 @@ fn run_tui() -> Result<()> {
         app.start_postmark_fetch();
     }
 
-    // IPC server — bind socket, hand jobs to the App via mpsc. `_guard`
+    // IPC server — bind socket, hand jobs to the engine via mpsc. `_guard`
     // lives until the end of run_tui so its Drop removes the socket file
-    // when helm exits cleanly.
+    // when helm exits cleanly. The TUI ignores `shutdown_rx`; only the
+    // daemon listens for that signal.
+    //
+    // Coexistence: if a `helm daemon` is already bound, ask it to shut
+    // down so we can take over the socket. The TUI is the privileged
+    // owner while open (single binder). On clean exit below we re-spawn
+    // a daemon so external `helm exec` keeps working.
     let socket = crate::ipc::socket_path();
+    if let Ok(Some(v)) = crate::ipc::client::ping_socket(&socket) {
+        eprintln!("helm: handing off from running daemon v{v}");
+        if let Err(e) = crate::ipc::client::shutdown_socket(&socket, Duration::from_secs(3)) {
+            eprintln!("helm: warning — daemon shutdown signal failed: {e}");
+        }
+    }
     let _guard = match crate::ipc::server::start(socket.clone()) {
-        Ok((guard, jobs_rx)) => {
-            eprintln!("helm: control socket at {}", guard.socket_path.display());
-            app.jobs_rx = Some(jobs_rx);
-            Some(guard)
+        Ok(handles) => {
+            eprintln!("helm: control socket at {}", handles.guard.socket_path.display());
+            app.engine.attach_jobs_rx(handles.jobs_rx);
+            Some(handles.guard)
         }
         Err(e) => {
             eprintln!("helm: warning — could not bind control socket: {e}");
@@ -485,6 +720,19 @@ fn run_tui() -> Result<()> {
     let mut terminal = setup_terminal()?;
     let res = run(&mut terminal, &mut app);
     restore_terminal(&mut terminal)?;
+
+    // Drop the socket guard BEFORE spawning the replacement daemon so its
+    // bind doesn't race with our unlink. `_guard` is Some when we owned
+    // the socket; None means we couldn't bind in the first place, so
+    // there's nothing to hand off and spawning a daemon would help future
+    // `helm exec` calls.
+    drop(_guard);
+    if auto_daemon {
+        match spawn_detached_daemon() {
+            Ok(pid) => eprintln!("helm: daemon up (pid {pid}) — `helm exec` reachable"),
+            Err(e) => eprintln!("helm: warning — auto-spawn daemon failed: {e}"),
+        }
+    }
     res
 }
 

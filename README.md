@@ -73,7 +73,16 @@ ssh-add ~/.ssh/id_ed25519        # if not already loaded
 ./target/release/helm
 ```
 
-`config.toml` is loaded from the current working directory first, then `$XDG_CONFIG_HOME/helm/config.toml` (e.g. `~/.config/helm/config.toml`). It is gitignored.
+`config.toml` is loaded from the current working directory first, then `$XDG_CONFIG_HOME/helm/config.toml` (e.g. `~/.config/helm/config.toml` on Linux/OpenBSD, `~/Library/Application Support/helm/config.toml` on macOS). It is gitignored.
+
+### Platforms
+
+Helm runs anywhere it can find `ssh`, `tmux`, and the rest of OpenSSH's CLI on the *operator's* machine — what runs on the remote side is OpenBSD by assumption. Tested:
+
+- **OpenBSD / Linux**: build straight from `cargo build --release`.
+- **macOS**: `brew install tmux` (OpenSSH ships with the OS). Then `cargo build --release` like anywhere else. The control socket lands at `~/Library/Caches/helm/helm.sock` and the state DB at `~/Library/Application Support/helm/state.db`.
+
+The OpenBSD log defaults (`/var/log/messages`, `daemon`, `authlog`) only make sense against OpenBSD hosts; mac users tailing logs on their own machine via the `local` alias should add explicit `[[logs]]` entries pointing at `/var/log/system.log` or whatever they actually want.
 
 ### Putting `helm` on your `$PATH`
 
@@ -230,6 +239,23 @@ A ready-to-load Claude Code skill is included at [`.claude/skills/helm-shell/SKI
 - **Use labels for parallel work.** `<alias>:deploy`, `<alias>:logs` — each label is a separate remote tmux session the operator can attach to in its own window.
 
 The skill file documents the four primitives (`open -d`, `read`, `send`, `list`), an `ssh-agent` bridge pattern for sharing the agent socket between operator and assistant Bash invocations, and the read-then-send workflow in detail. Open it for the full guide.
+
+### `helm daemon`
+
+`helm exec` connects to a control socket. When the TUI is open the TUI owns the socket; when it isn't, a `helm daemon` does. Either way, an AI agent calling `helm exec <alias> <cmd>` from a separate shell gets the same streamed output, the same SQLite history row, and the same agent-tail entry the operator sees on next launch.
+
+```sh
+helm daemon                # foreground; SIGINT / SIGTERM exit cleanly
+helm daemon start          # spawn detached; exit once the socket answers
+helm daemon stop           # ask a running daemon to exit
+helm daemon status         # exit 0 if a daemon (or TUI) is reachable
+```
+
+Coexistence is automatic:
+- Starting the TUI while a daemon is running quietly shuts the daemon down so the TUI can bind the socket.
+- Closing the TUI re-spawns `helm daemon start` so `helm exec` stays reachable. Set `auto_daemon = false` in `config.toml` to opt out.
+
+Only one helm process (TUI or daemon) binds the socket at a time — there is no shared-DB write contention to worry about. The socket lives at `$XDG_RUNTIME_DIR/helm.sock` on Linux (with a fallback chain through `$XDG_CACHE_HOME/helm/helm.sock`), and at `~/Library/Caches/helm/helm.sock` on macOS.
 
 ## Services pane / doas
 

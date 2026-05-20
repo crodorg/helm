@@ -1,5 +1,10 @@
 # Copy to config.toml and edit. config.toml is gitignored.
 #
+# When the TUI exits, helm auto-spawns `helm daemon` in the background so
+# external `helm exec` calls still reach the control socket. Set to false
+# to keep your machine free of background daemons.
+# auto_daemon = true
+#
 # Hosts: each VPS or local server you want to manage.
 # `ssh_alias` must resolve via your ~/.ssh/config so ssh-agent + ProxyJump work
 # without helm caring about the details.

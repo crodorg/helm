@@ -11,12 +11,12 @@ use crate::app::{App, AgentOutputLine};
 pub fn draw(f: &mut Frame, area: Rect, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(format!(" agent tail  ({} commands) ", app.agent_history.len()))
+        .title(format!(" agent tail  ({} commands) ", app.engine.agent_history.len()))
         .border_style(Style::default().fg(Color::Magenta));
 
     let mut lines: Vec<Line> = Vec::new();
 
-    if app.agent_history.is_empty() {
+    if app.engine.agent_history.is_empty() {
         lines.push(Line::from(Span::styled(
             "no agent activity yet — run `helm exec <alias> <cmd>` from another shell",
             Style::default().fg(Color::DarkGray),
@@ -31,7 +31,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(Color::DarkGray),
         )));
     } else {
-        for (i, entry) in app.agent_history.iter().enumerate() {
+        for (i, entry) in app.engine.agent_history.iter().enumerate() {
             let header = format!(
                 "── #{} {} › {} ──",
                 i + 1,

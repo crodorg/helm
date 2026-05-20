@@ -16,6 +16,12 @@ pub struct Config {
     pub shortcuts: Vec<Shortcut>,
     #[serde(default)]
     pub logs: Vec<Log>,
+    /// When true (default), `helm` spawns a `helm daemon` after the TUI
+    /// exits so external `helm exec` calls still work. Set to false to
+    /// keep the operator's machine free of background daemons (e.g.
+    /// when running `helm` on a laptop only ad-hoc).
+    #[serde(default)]
+    pub auto_daemon: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

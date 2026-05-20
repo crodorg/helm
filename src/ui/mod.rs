@@ -101,7 +101,7 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
         Mode::Dns => " dns ",
         Mode::Help => " help ",
     };
-    let agent_active = app.agent_active.is_some();
+    let agent_active = app.engine.agent_active.is_some();
     let agent_chip_bg = if agent_active {
         Color::Yellow
     } else {
@@ -122,7 +122,7 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
         ),
         Span::raw("  "),
         Span::styled(
-            format!(" {} ", app.agent_indicator()),
+            format!(" {} ", app.engine.agent_indicator()),
             Style::default()
                 .fg(Color::Black)
                 .bg(agent_chip_bg)

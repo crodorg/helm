@@ -1,9 +1,10 @@
 use std::cell::Cell;
-use std::collections::VecDeque;
 use std::sync::mpsc::Receiver;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::config::{builtin_logs, Config, Host, Log};
+use crate::engine::Engine;
+pub use crate::engine::AgentOutputLine;
 use crate::history::{HistoryStore, LineKind, LineRecord, RunSource};
 use crate::inventory::health::{self, Health, HealthResult};
 use crate::inventory::ports::{self as ports_inv, ListeningSocket};
@@ -11,12 +12,10 @@ use crate::inventory::processes::{self as procs_inv, Process};
 use crate::inventory::services::{parse_rcctl, Service};
 use crate::money::{self, MoneyCache, MoneyResult, MoneySlot};
 use crate::vultr::{self, ActionKind, ActionResult, VultrCache, VultrResult, VultrSlot};
-use crate::ipc::protocol::{Event as IpcEvent, Request as IpcRequest};
-use crate::ipc::server::Job;
 use crate::ssh::collect::{
     spawn_processes_and_ports, spawn_rcctl_triple, CollectResult, InvResult, InvSlot, Slot,
 };
-use crate::ssh::{spawn_remote, RunEvent, RunHandle};
+use crate::ssh::{RunEvent, RunHandle};
 use crate::tmux::shell_quote;
 
 pub const PAGE_STEP: usize = 10;
@@ -231,14 +230,6 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
-fn agent_line_to_record(l: &AgentOutputLine) -> LineRecord {
-    match l {
-        AgentOutputLine::Out(s) => LineRecord { kind: LineKind::Out, line: s.clone() },
-        AgentOutputLine::Err(s) => LineRecord { kind: LineKind::Err, line: s.clone() },
-        AgentOutputLine::System(s) => LineRecord { kind: LineKind::System, line: s.clone() },
-    }
-}
-
 fn output_line_to_record(l: &OutputLine) -> LineRecord {
     match l {
         OutputLine::Out(s) => LineRecord { kind: LineKind::Out, line: s.clone() },
@@ -286,16 +277,6 @@ fn spawn_dns_state(config: &crate::config::Config) -> DnsState {
         rows,
         business_names,
         scroll: ScrollState::new_top(),
-    }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
-        out.push('…');
-        out
     }
 }
 
@@ -496,41 +477,6 @@ impl ProcessesState {
     }
 }
 
-/// One completed (or in-flight) agent-issued command, accumulated for
-/// the tail view.
-#[derive(Debug, Clone)]
-pub struct AgentHistoryEntry {
-    pub alias: String,
-    pub cmd: String,
-    /// Monotonic capture time — used for duration_ms math when the run
-    /// completes. Never persisted (Instant is process-local).
-    pub started_at: Instant,
-    /// Wall-clock unix seconds at run start — persisted to history.db
-    /// and used to sort SQLite-loaded entries against in-memory ones.
-    pub started_at_unix: i64,
-    pub output: Vec<AgentOutputLine>,
-    pub exit: Option<i32>,
-    /// True for entries reconstructed from the history DB on startup.
-    /// Lets the UI tag them visually and skip re-persisting on a
-    /// hypothetical "replay" (not implemented).
-    pub from_history: bool,
-}
-
-#[derive(Debug, Clone)]
-pub enum AgentOutputLine {
-    Out(String),
-    Err(String),
-    System(String),
-}
-
-/// In-flight agent execution. While `Some(_)`, the main loop forwards each
-/// RunEvent to (a) `history.last_mut()` (the corresponding entry) and (b)
-/// the socket worker via `response_tx`.
-pub struct AgentExec {
-    pub handle: RunHandle,
-    pub response_tx: std::sync::mpsc::Sender<IpcEvent>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputFocus {
     /// Typing a command to run.
@@ -674,16 +620,10 @@ pub struct App {
     pub postmark_rx: Option<Receiver<crate::postmark::PostmarkResult>>,
     pub postmark_fetch_attempted: bool,
 
-    // agent-as-operator state
-    pub jobs_rx: Option<Receiver<Job>>,
-    pub agent_history: Vec<AgentHistoryEntry>,
-    pub agent_active: Option<AgentExec>,
-    pub agent_queue: VecDeque<Job>,
-
-    /// SQLite-backed run history. `None` when the DB couldn't be opened —
-    /// helm continues to work but state is ephemeral. Mutex via &mut self
-    /// is sufficient because every call is on the main loop thread.
-    pub history: Option<HistoryStore>,
+    // Agent-as-operator engine (job queue + IPC-initiated remote runs +
+    // history persistence). Shared with `helm daemon`, so all state lives
+    // there rather than directly on App.
+    pub engine: Engine,
 
     /// Scroll state for the AgentTail pane. Mode-level rather than
     /// per-entry because the pane shows one continuous transcript.
@@ -736,247 +676,31 @@ impl App {
             postmark_results: std::collections::HashMap::new(),
             postmark_rx: None,
             postmark_fetch_attempted: false,
-            jobs_rx: None,
-            agent_history: Vec::new(),
-            agent_active: None,
-            agent_queue: VecDeque::new(),
-            history: None,
+            engine: Engine::new(),
             agent_tail_scroll: ScrollState::new_sticky(),
             vultr_scroll: ScrollState::new_top(),
         }
     }
 
-    /// Attach a SQLite-backed history store and rehydrate `agent_history`
-    /// with the most-recent N agent runs in chronological order. Older
-    /// entries are at index 0 so the AgentTail's append-only render keeps
-    /// new entries at the bottom.
+    /// Thin delegator to `Engine::attach_history` so call sites in
+    /// `main.rs` don't have to reach through `app.engine`.
     pub fn attach_history(&mut self, store: HistoryStore, load_limit: usize) {
-        // Cap retained rows so the DB doesn't grow unbounded across sessions.
-        // 5000 is a generous ceiling for solo-operator workloads — covers
-        // weeks of `helm exec` activity even on busy days.
-        if let Err(e) = store.prune_to(5000) {
-            tracing::warn!("history: prune_to(5000) failed: {e}");
-        }
-        match store.recent_runs(Some(RunSource::Agent), load_limit) {
-            Ok(mut runs) => {
-                // recent_runs returns newest-first; reverse so chronological.
-                runs.reverse();
-                for r in runs {
-                    let lines = match store.lines_for(r.id) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            tracing::warn!("history: lines_for({}) failed: {e}", r.id);
-                            continue;
-                        }
-                    };
-                    let output: Vec<AgentOutputLine> = lines
-                        .into_iter()
-                        .map(|l| match l.kind {
-                            LineKind::Out => AgentOutputLine::Out(l.line),
-                            LineKind::Err => AgentOutputLine::Err(l.line),
-                            LineKind::System => AgentOutputLine::System(l.line),
-                        })
-                        .collect();
-                    self.agent_history.push(AgentHistoryEntry {
-                        alias: r.alias,
-                        cmd: r.cmd,
-                        started_at: Instant::now(),
-                        started_at_unix: r.started_at_unix,
-                        output,
-                        exit: r.exit,
-                        from_history: true,
-                    });
-                }
-            }
-            Err(e) => tracing::warn!("history: recent_runs failed: {e}"),
-        }
-        self.history = Some(store);
+        self.engine.attach_history(store, load_limit);
     }
 
-    /// Drain any incoming IPC jobs into the queue, then kick off the next
-    /// one if nothing is running.
+    /// Drain any incoming IPC jobs and advance the agent queue. Resolves
+    /// the currently-selected host as the default alias so a client that
+    /// submits `Exec` with an empty alias targets the host the operator
+    /// has on screen (handy for TUI scratch-pad workflows).
     pub fn ingest_jobs(&mut self) {
-        if let Some(rx) = self.jobs_rx.as_ref() {
-            while let Ok(job) = rx.try_recv() {
-                self.agent_queue.push_back(job);
-            }
-        }
-        self.maybe_start_next_agent_job();
+        let default = self.selected_host().map(|h| h.ssh_alias.clone());
+        self.engine.ingest_jobs(default.as_deref());
     }
 
-    fn maybe_start_next_agent_job(&mut self) {
-        if self.agent_active.is_some() {
-            return;
-        }
-        let Some(job) = self.agent_queue.pop_front() else {
-            return;
-        };
-        let IpcRequest::Exec { alias, cmd } = job.request;
-        let resolved_alias = if alias.is_empty() {
-            self.selected_host().map(|h| h.ssh_alias.clone())
-        } else {
-            Some(alias)
-        };
-        let Some(alias) = resolved_alias else {
-            let _ = job.response_tx.send(IpcEvent::Error {
-                msg: "no alias provided and no host selected".into(),
-            });
-            let _ = job.response_tx.send(IpcEvent::Done { exit: 1 });
-            return;
-        };
-        let mut entry = AgentHistoryEntry {
-            alias: alias.clone(),
-            cmd: cmd.clone(),
-            started_at: Instant::now(),
-            started_at_unix: now_unix(),
-            output: vec![AgentOutputLine::System(format!(
-                "$ ssh {alias} '{cmd}'"
-            ))],
-            exit: None,
-            from_history: false,
-        };
-        match spawn_remote(&alias, &cmd) {
-            Ok(handle) => {
-                self.agent_history.push(entry);
-                self.agent_active = Some(AgentExec {
-                    handle,
-                    response_tx: job.response_tx,
-                });
-            }
-            Err(e) => {
-                let msg = format!("spawn failed: {e}");
-                entry
-                    .output
-                    .push(AgentOutputLine::System(msg.clone()));
-                entry.exit = Some(1);
-                self.agent_history.push(entry);
-                let _ = job.response_tx.send(IpcEvent::Error { msg });
-                let _ = job.response_tx.send(IpcEvent::Done { exit: 1 });
-            }
-        }
-    }
-
+    /// Drain output from the active agent run and finalize it on Done /
+    /// Error / disconnection.
     pub fn ingest_agent_events(&mut self) {
-        let mut events = Vec::new();
-        let mut disconnected = false;
-        if let Some(active) = self.agent_active.as_ref() {
-            loop {
-                match active.handle.rx.try_recv() {
-                    Ok(ev) => events.push(ev),
-                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        disconnected = true;
-                        break;
-                    }
-                }
-            }
-        }
-        for ev in events {
-            self.apply_agent_event(ev);
-        }
-        if disconnected {
-            // Stream went away without a Done event — finalize defensively.
-            if let Some(active) = self.agent_active.take() {
-                if let Some(entry) = self.agent_history.last_mut() {
-                    if entry.exit.is_none() {
-                        entry.exit = Some(-1);
-                        entry
-                            .output
-                            .push(AgentOutputLine::System("(channel closed)".into()));
-                    }
-                }
-                let _ = active.response_tx.send(IpcEvent::Done { exit: -1 });
-            }
-            self.maybe_start_next_agent_job();
-        }
-    }
-
-    fn apply_agent_event(&mut self, ev: RunEvent) {
-        let Some(active) = self.agent_active.as_ref() else {
-            return;
-        };
-        let response_tx = active.response_tx.clone();
-        let entry = match self.agent_history.last_mut() {
-            Some(e) => e,
-            None => return,
-        };
-        match ev {
-            RunEvent::Out(l) => {
-                let _ = response_tx.send(IpcEvent::Out { line: l.clone() });
-                entry.output.push(AgentOutputLine::Out(l));
-            }
-            RunEvent::Err(l) => {
-                let _ = response_tx.send(IpcEvent::Err { line: l.clone() });
-                entry.output.push(AgentOutputLine::Err(l));
-            }
-            RunEvent::Partial(_) => {
-                // Partial lines (e.g. password prompts) — surface as system
-                // line in history but do not forward to client. A agent
-                // command requiring a password modal is a workflow problem;
-                // the user can intervene from the TUI.
-                entry.output.push(AgentOutputLine::System(
-                    "(password prompt detected — agent command paused; \
-                     answer in TUI Runner if intended)".into(),
-                ));
-            }
-            RunEvent::NeedPassword => {
-                entry.output.push(AgentOutputLine::System(
-                    "(password prompt — needs human in TUI)".into(),
-                ));
-            }
-            RunEvent::Done(code) => {
-                entry.exit = Some(code);
-                entry
-                    .output
-                    .push(AgentOutputLine::System(format!("exit {code}")));
-                let _ = response_tx.send(IpcEvent::Done { exit: code });
-                self.agent_active = None;
-                self.persist_last_agent_entry();
-                self.maybe_start_next_agent_job();
-            }
-            RunEvent::Error(msg) => {
-                let _ = response_tx.send(IpcEvent::Error { msg: msg.clone() });
-                let _ = response_tx.send(IpcEvent::Done { exit: 1 });
-                entry.exit = Some(1);
-                entry.output.push(AgentOutputLine::System(format!("error: {msg}")));
-                self.agent_active = None;
-                self.persist_last_agent_entry();
-                self.maybe_start_next_agent_job();
-            }
-        }
-    }
-
-    /// Persist the most recent agent_history entry to SQLite. Called from
-    /// the two terminal `apply_agent_event` paths (Done / Error). Silently
-    /// no-ops when the DB isn't attached or when the entry was loaded
-    /// from history rather than live.
-    fn persist_last_agent_entry(&mut self) {
-        let Some(store) = self.history.as_mut() else {
-            return;
-        };
-        let Some(entry) = self.agent_history.last() else {
-            return;
-        };
-        if entry.from_history {
-            return;
-        }
-        let lines: Vec<LineRecord> = entry
-            .output
-            .iter()
-            .map(agent_line_to_record)
-            .collect();
-        let duration_ms = i64::try_from(entry.started_at.elapsed().as_millis()).ok();
-        if let Err(e) = store.insert_run(
-            RunSource::Agent,
-            &entry.alias,
-            &entry.cmd,
-            entry.started_at_unix,
-            entry.exit,
-            duration_ms,
-            &lines,
-        ) {
-            tracing::warn!("history: insert_run(agent) failed: {e}");
-        }
+        self.engine.ingest_agent_events();
     }
 
     pub fn open_agent_tail(&mut self) {
@@ -986,17 +710,6 @@ impl App {
     pub fn close_agent_tail(&mut self) {
         if self.mode == Mode::AgentTail {
             self.mode = Mode::Browse;
-        }
-    }
-
-    /// Header chip text describing current agent activity, regardless of
-    /// the user's currently-focused mode.
-    pub fn agent_indicator(&self) -> String {
-        if let Some(active) = self.agent_active.as_ref() {
-            let snippet = truncate(&active.handle.command, 40);
-            format!("🤖 {} › {}", active.handle.alias, snippet)
-        } else {
-            format!("🤖 idle ({})", self.agent_history.len())
         }
     }
 
@@ -1694,7 +1407,7 @@ impl App {
     /// still opens but renders an empty-state error.
     pub fn open_history(&mut self) {
         self.mode = Mode::History;
-        let state = match self.history.as_ref() {
+        let state = match self.engine.history.as_ref() {
             Some(store) => match store.recent_runs(None, 200) {
                 Ok(entries) => HistoryState {
                     entries,
@@ -2094,7 +1807,7 @@ impl App {
     /// Clears `runner.current_*` fields after a successful insert so a
     /// follow-up `[r] new cmd` doesn't double-persist.
     fn persist_operator_run(&mut self, exit: Option<i32>) {
-        let Some(store) = self.history.as_mut() else {
+        let Some(store) = self.engine.history.as_mut() else {
             self.runner.current_alias = None;
             self.runner.current_cmd = None;
             self.runner.current_started_at = None;
