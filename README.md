@@ -73,7 +73,12 @@ ssh-add ~/.ssh/id_ed25519        # if not already loaded
 ./target/release/helm
 ```
 
-`config.toml` is loaded from the current working directory first, then `$XDG_CONFIG_HOME/helm/config.toml` (e.g. `~/.config/helm/config.toml` on Linux/OpenBSD, `~/Library/Application Support/helm/config.toml` on macOS). It is gitignored.
+`config.toml` is loaded from, in order:
+1. the current working directory,
+2. the platform-native config dir (`~/.config/helm/config.toml` on Linux/OpenBSD, `~/Library/Application Support/helm/config.toml` on macOS),
+3. and — for macOS users who keep a single cross-machine config — `~/.config/helm/config.toml` (or `$XDG_CONFIG_HOME/helm/config.toml`).
+
+It is gitignored. Helm prints the chosen path to stderr on startup so you can confirm which file actually got loaded.
 
 ### Platforms
 

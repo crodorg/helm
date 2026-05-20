@@ -191,16 +191,47 @@ fn default_true() -> bool {
     true
 }
 
+/// Ordered list of candidate `config.toml` locations. First existing wins.
+/// 1. `./config.toml` (cwd) — handy for `cargo run` and dev loops.
+/// 2. Platform-native config dir via the `directories` crate:
+///    - Linux/OpenBSD: `$XDG_CONFIG_HOME/helm/config.toml` (= `~/.config/helm/...`)
+///    - macOS:         `~/Library/Application Support/helm/config.toml`
+/// 3. XDG-style fallback at `$XDG_CONFIG_HOME/helm/config.toml` (= `~/.config/helm/...`).
+///    Only meaningful on macOS, where #2 picks the Apple convention but
+///    many developers reach for `~/.config/helm/...` first because that's
+///    where the same config lives on their other boxes. Silently overlaps
+///    on Linux.
+pub fn candidate_paths() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        out.push(cwd.join("config.toml"));
+    }
+    if let Some(dirs) = directories::ProjectDirs::from("", "", "helm") {
+        out.push(dirs.config_dir().join("config.toml"));
+    }
+    if let Some(xdg) = xdg_config_helm_path() {
+        out.push(xdg);
+    }
+    out
+}
+
+fn xdg_config_helm_path() -> Option<PathBuf> {
+    let base = if let Some(v) = std::env::var_os("XDG_CONFIG_HOME") {
+        PathBuf::from(v)
+    } else {
+        let home = std::env::var_os("HOME")?;
+        let mut p = PathBuf::from(home);
+        p.push(".config");
+        p
+    };
+    Some(base.join("helm").join("config.toml"))
+}
+
 impl Config {
     pub fn load() -> Result<Self> {
-        let cwd = std::env::current_dir()?;
-        let local = cwd.join("config.toml");
-        if local.exists() {
-            return Self::load_from(&local);
-        }
-        if let Some(dirs) = directories::ProjectDirs::from("", "", "helm") {
-            let p = dirs.config_dir().join("config.toml");
+        for p in candidate_paths() {
             if p.exists() {
+                eprintln!("helm: config {}", p.display());
                 return Self::load_from(&p);
             }
         }
