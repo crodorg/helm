@@ -42,18 +42,30 @@ impl RunHandle {
     }
 }
 
-/// Spawn `ssh -tt <alias> <cmd>`, returning a handle that streams output
+/// Spawn `ssh -tt <alias> <cmd>` for remote aliases, or `sh -c <cmd>` for
+/// the reserved `local` alias, returning a handle that streams output
 /// asynchronously via mpsc. `-tt` forces a remote PTY so `doas` writes its
-/// password prompt to a fd we can see.
+/// password prompt to a fd we can see; the local branch inherits the
+/// caller's TTY situation via `sh`.
 pub fn spawn_remote(alias: &str, cmd: &str) -> std::io::Result<RunHandle> {
-    let mut child = Command::new("ssh")
-        .arg("-tt")
-        .arg(alias)
-        .arg(cmd)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+    let mut child = if alias == crate::tmux::LOCAL_ALIAS {
+        Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?
+    } else {
+        Command::new("ssh")
+            .arg("-tt")
+            .arg(alias)
+            .arg(cmd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?
+    };
 
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");

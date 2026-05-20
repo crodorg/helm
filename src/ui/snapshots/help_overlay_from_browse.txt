@@ -8,13 +8,13 @@
 │               │ [R]      refresh-all overlays                │               │
 │               │ [F5]     reload config.toml                  │               │
 │               │ [s]      services                            │               │
+│               │ [S]      shell sessions                      │               │
 │               │ [p]      processes                           │               │
 │               │ [H]      health                              │               │
-│               │ [v]      vultr                               │               │
-└───────────────│ [m]      money                               │               │
-┌ keys (?) ─────│ [l]      logs                                │               │
-│ [?]    close  │ [t]      history                             │               │
-│ [esc]  close  │ [d]      dns                                 │               │
-│ [q]    close  │ [a]      shortcuts                           │               │
+└───────────────│ [v]      vultr                               │               │
+┌ keys (?) ─────│ [m]      money                               │               │
+│ [?]    close  │ [l]      logs                                │               │
+│ [esc]  close  │ [t]      history                             │               │
+│ [q]    close  │ [d]      dns                                 │               │
 └───────────────└──────────────────────────────────────────────┘───────────────┘
  press [?] for keys

@@ -11,6 +11,6 @@
 │ [R]      refresh-all over││                                                  │
 │ [F5]     reload config.to││                                                  │
 │ [s]      services        ││                                                  │
-│ [p]      processes       ││                                                  │
+│ [S]      shell sessions  ││                                                  │
 └──────────────────────────┘└──────────────────────────────────────────────────┘
  press [?] for keys
