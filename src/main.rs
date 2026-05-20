@@ -103,26 +103,32 @@ usage:
 
 fn print_shell_help() {
     eprintln!(
-        "helm shell — persistent VPS-side tmux shell sessions
+        "helm shell — persistent tmux shell sessions on a chosen host
 
-Sessions live on the VPS, not your machine. Each `<target>` is `<alias>`
-(default session `helm`) or `<alias>:<label>` (session `helm-<label>`).
-Persistence survives helm restarts, network drops, and operator-machine
-reboots — only a VPS reboot or remote `tmux kill-server` tears them down.
+Sessions live on the chosen host. Each `<target>` is `<alias>` (default
+session `helm`) or `<alias>:<label>` (session `helm-<label>`). The
+reserved alias `local` runs against your own machine instead of ssh —
+use it for shells that need interactive doas password entry or a
+separate history from your own terminal. Persistence survives helm
+restarts, network drops, and operator-machine reboots for remote
+sessions; local sessions survive until your machine reboots or its
+tmux server is killed.
 
 usage:
-  helm shell open <target>            attach this terminal to the remote
-                                      session (creates it if missing)
-  helm shell open -d <target>         create the remote session detached;
-                                      do not attach
-  helm shell send <target> <text...>  send a line of text (auto-Enter) to
-                                      the remote session's active pane;
+  helm shell open <target>            attach this terminal to the
+                                      session (creates if missing)
+  helm shell open -d <target>         create the session detached; do
+                                      not attach
+  helm shell send <target> <text...>  send a line of text (auto-Enter)
+                                      to the session's active pane;
                                       creates the session if missing
-  helm shell read <target> [-n LINES] capture the active pane's scrollback
-                                      (default 1000); creates if missing
-  helm shell list <alias>             list helm-* sessions on the alias's
-                                      remote tmux server
-  helm shell close <target>           kill the remote session"
+  helm shell read <target> [-n LINES] capture the active pane's
+                                      scrollback (default 1000); creates
+                                      if missing
+  helm shell list <alias>             list helm-* sessions on the
+                                      alias's tmux server (use `local`
+                                      for your own machine)
+  helm shell close <target>           kill the session"
     );
 }
 
@@ -166,21 +172,31 @@ fn shell_open(args: &[String]) -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
         eprintln!(
-            "helm: remote session ready on {alias} — attach with `helm shell open {target}`"
+            "helm: session ready on {alias} — attach with `helm shell open {target}`"
         );
         return std::process::ExitCode::SUCCESS;
     }
-    // Replace current process with `ssh -t <alias> 'tmux new-session -A -s
-    // <session>'`. The `-A` flag makes new-session idempotent: attach if
-    // exists, create otherwise. Never returns on success.
+    // Replace current process with `tmux new-session -A -s <session>` —
+    // directly when the alias is `local`, otherwise via `ssh -t <alias>`.
+    // `-A` makes new-session idempotent: attach if exists, create
+    // otherwise. Never returns on success.
     use std::os::unix::process::CommandExt;
-    let remote = format!("tmux new-session -A -s {session}");
-    let err = std::process::Command::new("ssh")
-        .arg("-t")
-        .arg(&alias)
-        .arg(&remote)
-        .exec();
-    eprintln!("helm: exec ssh attach failed: {err}");
+    let err = if alias == tmux::LOCAL_ALIAS {
+        std::process::Command::new("tmux")
+            .arg("new-session")
+            .arg("-A")
+            .arg("-s")
+            .arg(&session)
+            .exec()
+    } else {
+        let remote = format!("tmux new-session -A -s {session}");
+        std::process::Command::new("ssh")
+            .arg("-t")
+            .arg(&alias)
+            .arg(&remote)
+            .exec()
+    };
+    eprintln!("helm: exec tmux attach failed: {err}");
     std::process::ExitCode::FAILURE
 }
 
