@@ -1,3 +1,4 @@
+mod activity;
 mod app;
 mod config;
 mod engine;
@@ -194,8 +195,21 @@ fn shell_open(args: &[String]) -> std::process::ExitCode {
         }
     };
     let (alias, session) = tmux::parse_target(target);
+    let session_label = tmux_label_from_target(target);
     if detached {
-        if let Err(e) = tmux::ensure_session(target) {
+        let result = tmux::ensure_session(target);
+        log_action(
+            activity::ActivityKind::ShellOpen,
+            &alias,
+            &session_label,
+            &format!("-d {target}"),
+            "",
+            match &result {
+                Ok(()) => Some(0),
+                Err(_) => Some(1),
+            },
+        );
+        if let Err(e) = result {
             eprintln!("helm: {e}");
             return std::process::ExitCode::FAILURE;
         }
@@ -204,6 +218,17 @@ fn shell_open(args: &[String]) -> std::process::ExitCode {
         );
         return std::process::ExitCode::SUCCESS;
     }
+    // Attach path replaces the current process via exec(); log BEFORE the
+    // exec call since we never return on success. Exit is `None` because
+    // we can't observe the attached tmux's eventual exit code.
+    log_action(
+        activity::ActivityKind::ShellOpen,
+        &alias,
+        &session_label,
+        &format!("attach {target}"),
+        "",
+        None,
+    );
     // Replace current process with `tmux new-session -A -s <session>` —
     // directly when the alias is `local`, otherwise via `ssh -t <alias>`.
     // `-A` makes new-session idempotent: attach if exists, create
@@ -239,11 +264,34 @@ fn shell_send(args: &[String]) -> std::process::ExitCode {
     }
     let target = &args[0];
     let text = args[1..].join(" ");
-    if let Err(e) = tmux::ensure_session(target) {
+    let (alias, _) = tmux::parse_target(target);
+    let session_label = tmux_label_from_target(target);
+    let ensure = tmux::ensure_session(target);
+    if let Err(e) = &ensure {
+        log_action(
+            activity::ActivityKind::ShellSend,
+            &alias,
+            &session_label,
+            &text,
+            "",
+            Some(1),
+        );
         eprintln!("helm: {e}");
         return std::process::ExitCode::FAILURE;
     }
-    if let Err(e) = tmux::send_keys(target, &text) {
+    let send = tmux::send_keys(target, &text);
+    log_action(
+        activity::ActivityKind::ShellSend,
+        &alias,
+        &session_label,
+        &text,
+        "",
+        match &send {
+            Ok(()) => Some(0),
+            Err(_) => Some(1),
+        },
+    );
+    if let Err(e) = send {
         eprintln!("helm: {e}");
         return std::process::ExitCode::FAILURE;
     }
@@ -266,16 +314,42 @@ fn shell_read(args: &[String]) -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
+    let (alias, _) = tmux::parse_target(target);
+    let session_label = tmux_label_from_target(target);
     if let Err(e) = tmux::ensure_session(target) {
+        log_action(
+            activity::ActivityKind::ShellRead,
+            &alias,
+            &session_label,
+            &format!("-n {lines}"),
+            "",
+            Some(1),
+        );
         eprintln!("helm: {e}");
         return std::process::ExitCode::FAILURE;
     }
     match tmux::capture(target, lines) {
         Ok(s) => {
+            log_action(
+                activity::ActivityKind::ShellRead,
+                &alias,
+                &session_label,
+                &format!("-n {lines}"),
+                &activity::preview(&s),
+                Some(0),
+            );
             print!("{s}");
             std::process::ExitCode::SUCCESS
         }
         Err(e) => {
+            log_action(
+                activity::ActivityKind::ShellRead,
+                &alias,
+                &session_label,
+                &format!("-n {lines}"),
+                "",
+                Some(1),
+            );
             eprintln!("helm: {e}");
             std::process::ExitCode::FAILURE
         }
@@ -289,16 +363,33 @@ fn shell_list(args: &[String]) -> std::process::ExitCode {
     };
     match tmux::list(alias) {
         Ok(targets) => {
+            let count = targets.len();
             if targets.is_empty() {
                 eprintln!("(no helm-* tmux sessions on {alias})");
             } else {
-                for t in targets {
+                for t in &targets {
                     println!("{t}");
                 }
             }
+            log_action(
+                activity::ActivityKind::ShellList,
+                alias,
+                "",
+                "",
+                &format!("{count} sessions"),
+                Some(0),
+            );
             std::process::ExitCode::SUCCESS
         }
         Err(e) => {
+            log_action(
+                activity::ActivityKind::ShellList,
+                alias,
+                "",
+                "",
+                "",
+                Some(1),
+            );
             eprintln!("helm: {e}");
             std::process::ExitCode::FAILURE
         }
@@ -310,9 +401,29 @@ fn shell_close(args: &[String]) -> std::process::ExitCode {
         eprintln!("usage: helm shell close <target>");
         return std::process::ExitCode::from(2);
     };
+    let (alias, _) = tmux::parse_target(target);
+    let session_label = tmux_label_from_target(target);
     match tmux::kill(target) {
-        Ok(()) => std::process::ExitCode::SUCCESS,
+        Ok(()) => {
+            log_action(
+                activity::ActivityKind::ShellClose,
+                &alias,
+                &session_label,
+                target,
+                "",
+                Some(0),
+            );
+            std::process::ExitCode::SUCCESS
+        }
         Err(e) => {
+            log_action(
+                activity::ActivityKind::ShellClose,
+                &alias,
+                &session_label,
+                target,
+                "",
+                Some(1),
+            );
             eprintln!("helm: {e}");
             std::process::ExitCode::FAILURE
         }
@@ -326,7 +437,56 @@ fn run_exec_cli(args: &[String]) -> std::process::ExitCode {
     }
     let alias = args[0].clone();
     let cmd = args[1..].join(" ");
-    ipc::client::run(&IpcRequest::Exec { alias, cmd })
+    let exit = ipc::client::run_capturing(&IpcRequest::Exec {
+        alias: alias.clone(),
+        cmd: cmd.clone(),
+    });
+    log_action(
+        activity::ActivityKind::Exec,
+        &alias,
+        "",
+        &cmd,
+        "",
+        Some(exit),
+    );
+    let c: u8 = if (0..=255).contains(&exit) { exit as u8 } else { 1 };
+    std::process::ExitCode::from(c)
+}
+
+/// Returns just the label after the `:` for an `alias:label` target, or
+/// the empty string for a bare `alias` target. Used for the activity
+/// log's `session` column.
+fn tmux_label_from_target(target: &str) -> String {
+    match target.split_once(':') {
+        Some((_, label)) => label.to_string(),
+        None => String::new(),
+    }
+}
+
+/// Construct + append an activity record from the CLI side. Best-effort;
+/// failures are logged to stderr inside `activity::append` and never
+/// propagate.
+fn log_action(
+    kind: activity::ActivityKind,
+    alias: &str,
+    session: &str,
+    cmd: &str,
+    output_preview: &str,
+    exit: Option<i32>,
+) {
+    let record = activity::ActivityRecord {
+        ts_unix: activity::now_unix(),
+        pid: std::process::id(),
+        ppid: activity::ppid(),
+        kind,
+        alias: alias.to_string(),
+        session: session.to_string(),
+        cmd: cmd.to_string(),
+        output_preview: output_preview.to_string(),
+        has_privilege_escalation: activity::has_privilege_escalation(cmd),
+        exit,
+    };
+    activity::append(&record);
 }
 
 /// Load ~/.ssh/config according to the cfg's `[ssh_config]` section,

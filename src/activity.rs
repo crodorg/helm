@@ -1,0 +1,253 @@
+//! Append-only audit log of agent-driven helm actions.
+//!
+//! Every CLI invocation that an external agent could plausibly trigger
+//! (`helm exec`, `helm shell open/send/read/list/close`) writes one JSON
+//! line to `$XDG_STATE_HOME/helm/activity.jsonl` (or `~/.local/state/helm/`
+//! on Linux, `~/Library/Application Support/helm/` on macOS). The TUI's
+//! AgentTail pane tails this file so the operator can see exactly what
+//! the agent is doing in real time — even sends that don't go through
+//! helm's control socket.
+//!
+//! Design constraints:
+//!
+//! - **Append-only on disk.** Writes use `O_APPEND` + a single short write
+//!   per record so concurrent helm processes can't corrupt each other and
+//!   the log is tamper-resistant from inside the helm process itself.
+//! - **Agent-agnostic.** Logged from the helm CLI, not the agent. Whether
+//!   the caller is Claude / Cursor / Aider / a bash one-liner, the same
+//!   record gets written.
+//! - **Cheap.** Best-effort. If logging fails the command still runs;
+//!   the operator gets a stderr warning but never an error exit code.
+
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityKind {
+    Exec,
+    ShellOpen,
+    ShellSend,
+    ShellRead,
+    ShellList,
+    ShellClose,
+}
+
+impl ActivityKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            ActivityKind::Exec => "exec",
+            ActivityKind::ShellOpen => "open",
+            ActivityKind::ShellSend => "send",
+            ActivityKind::ShellRead => "read",
+            ActivityKind::ShellList => "list",
+            ActivityKind::ShellClose => "close",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActivityRecord {
+    pub ts_unix: u64,
+    pub pid: u32,
+    pub ppid: u32,
+    pub kind: ActivityKind,
+    pub alias: String,
+    /// tmux label component (`alias:label`) or empty for bare `<alias>` /
+    /// non-tmux commands.
+    pub session: String,
+    /// The command text the agent asked helm to run / send.
+    pub cmd: String,
+    /// First two non-empty lines of the captured output, joined with `⏎`.
+    /// Always empty for kinds that don't read output.
+    pub output_preview: String,
+    /// True when `cmd` mentions `doas` or `sudo` as a whole-word token —
+    /// rendered with a `[DOAS]` badge in the TUI so privilege escalation
+    /// is impossible to miss.
+    pub has_privilege_escalation: bool,
+    /// `None` while the action is in flight, `Some` once it finishes. CLI
+    /// hooks write one record on completion so this is always populated.
+    pub exit: Option<i32>,
+}
+
+/// Returns the resolved log path, creating parent directories as needed.
+pub fn log_path() -> Option<PathBuf> {
+    let base = if let Some(v) = std::env::var_os("XDG_STATE_HOME") {
+        PathBuf::from(v)
+    } else if let Some(home) = std::env::var_os("HOME") {
+        #[cfg(target_os = "macos")]
+        {
+            let mut p = PathBuf::from(home);
+            p.push("Library");
+            p.push("Application Support");
+            p
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let mut p = PathBuf::from(home);
+            p.push(".local");
+            p.push("state");
+            p
+        }
+    } else {
+        return None;
+    };
+    let dir = base.join("helm");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!("helm: activity log dir {}: {}", dir.display(), e);
+        return None;
+    }
+    Some(dir.join("activity.jsonl"))
+}
+
+/// Append a record. Best-effort: a failure here never blocks the caller.
+pub fn append(record: &ActivityRecord) {
+    let Some(path) = log_path() else { return };
+    let line = match serde_json::to_string(record) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("helm: activity serialize failed: {e}");
+            return;
+        }
+    };
+    let mut file = match OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("helm: activity open {}: {}", path.display(), e);
+            return;
+        }
+    };
+    if let Err(e) = writeln!(file, "{line}") {
+        eprintln!("helm: activity write: {e}");
+    }
+}
+
+/// Read the tail of the log. Returns the last `limit` records (chronological
+/// order — oldest first). Used by the AgentTail pane.
+pub fn tail(limit: usize) -> Vec<ActivityRecord> {
+    let Some(path) = log_path() else {
+        return Vec::new();
+    };
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let mut out: Vec<ActivityRecord> = raw
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    if out.len() > limit {
+        let drop = out.len() - limit;
+        out.drain(0..drop);
+    }
+    out
+}
+
+pub fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Substring-and-word-boundary scan for `doas` or `sudo`. Conservative:
+/// false positives are fine (the badge is informational), false negatives
+/// are not. Matches at the start of the command, after pipes, after `&&`,
+/// after `||`, after `;`, or after whitespace.
+pub fn has_privilege_escalation(cmd: &str) -> bool {
+    let mut prev_was_separator = true;
+    let mut i = 0;
+    let bytes = cmd.as_bytes();
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if prev_was_separator {
+            let rest = &cmd[i..];
+            for tok in &["doas ", "doas\t", "sudo ", "sudo\t"] {
+                if rest.starts_with(tok) {
+                    return true;
+                }
+            }
+            if rest == "doas" || rest == "sudo" {
+                return true;
+            }
+        }
+        prev_was_separator = matches!(c, ' ' | '\t' | ';' | '|' | '&' | '\n' | '(');
+        i += 1;
+    }
+    false
+}
+
+/// Extract first ≤2 non-empty lines from `s`, joined by `⏎` for single-row
+/// rendering. Truncates each line to keep the preview short.
+pub fn preview(s: &str) -> String {
+    let mut picks: Vec<String> = Vec::new();
+    for raw in s.lines() {
+        let t = raw.trim_end();
+        if t.is_empty() {
+            continue;
+        }
+        let trimmed: String = t.chars().take(120).collect();
+        picks.push(trimmed);
+        if picks.len() == 2 {
+            break;
+        }
+    }
+    picks.join(" ⏎ ")
+}
+
+/// Best-effort getter for the current process's parent PID; used only as
+/// metadata in the log.
+pub fn ppid() -> u32 {
+    // Fall back to 0 on platforms where the syscall isn't reachable.
+    #[cfg(unix)]
+    unsafe {
+        libc::getppid() as u32
+    }
+    #[cfg(not(unix))]
+    {
+        0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn privilege_escalation_at_start() {
+        assert!(has_privilege_escalation("doas rcctl restart httpd"));
+        assert!(has_privilege_escalation("sudo apt update"));
+    }
+
+    #[test]
+    fn privilege_escalation_after_pipe() {
+        assert!(has_privilege_escalation("cat /etc/passwd | sudo tee /tmp/x"));
+    }
+
+    #[test]
+    fn privilege_escalation_after_and() {
+        assert!(has_privilege_escalation("ls && doas rm /etc/foo"));
+    }
+
+    #[test]
+    fn privilege_escalation_no_false_positive_on_substring() {
+        assert!(!has_privilege_escalation("echo pseudoscience"));
+        assert!(!has_privilege_escalation("undoasked"));
+    }
+
+    #[test]
+    fn preview_takes_first_two_nonempty_lines() {
+        let p = preview("\n\nfirst\n\nsecond\nthird\n");
+        assert_eq!(p, "first ⏎ second");
+    }
+
+    #[test]
+    fn preview_handles_empty() {
+        assert_eq!(preview(""), "");
+    }
+}

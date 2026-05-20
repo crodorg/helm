@@ -4,32 +4,24 @@
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::process::ExitCode;
 use std::time::Duration;
 
 use crate::ipc::protocol::{Event, Request};
 use crate::ipc::socket_path;
 
-/// Connect, send `request`, stream events to stdout/stderr, return an
-/// ExitCode reflecting the remote process exit (or 1 on error).
-pub fn run(request: &Request) -> ExitCode {
+/// Connect, send `request`, stream events to stdout/stderr, and return
+/// the remote process's raw exit integer (or 1 on transport error). The
+/// CLI side wraps the result in `std::process::ExitCode` after logging
+/// it to the activity audit log.
+pub fn run_capturing(request: &Request) -> i32 {
     let path = socket_path();
     match connect_and_stream(&path, request) {
-        Ok(code) => exit_from(code),
+        Ok(code) => code,
         Err(e) => {
             eprintln!("helm: {e}");
-            ExitCode::from(1)
+            1
         }
     }
-}
-
-fn exit_from(code: i32) -> ExitCode {
-    let c: u8 = if (0..=255).contains(&code) {
-        code as u8
-    } else {
-        1
-    };
-    ExitCode::from(c)
 }
 
 fn connect_and_stream(path: &Path, request: &Request) -> anyhow::Result<i32> {

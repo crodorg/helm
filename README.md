@@ -114,6 +114,23 @@ Coexistence is automatic:
 
 Only one helm process (TUI or daemon) binds the socket at a time — there is no shared-DB write contention to worry about. The socket lives at `$XDG_RUNTIME_DIR/helm.sock` on Linux (with a fallback chain through `$XDG_CACHE_HOME/helm/helm.sock`), and at `~/Library/Caches/helm/helm.sock` on macOS.
 
+## Audit log — `activity.jsonl`
+
+Every `helm exec` and every `helm shell {open,send,read,list,close}` writes one JSON line to:
+
+- Linux/BSD: `$XDG_STATE_HOME/helm/activity.jsonl` (defaults to `~/.local/state/helm/activity.jsonl`)
+- macOS: `~/Library/Application Support/helm/activity.jsonl`
+
+The TUI's **agent activity** pane (`c` from Browse) renders this file as a scrollable list of rows: time, exit status, kind (`exec` / `send` / `read` / `open` / `close` / `list`), target (`alias:label`), command, and a 1-line output preview. Privilege-escalating commands (any `doas` / `sudo` token at the start of a command or after `|` / `&&` / `;`) are tagged with a red `[DOAS]` badge.
+
+The log is append-only and agent-agnostic — it doesn't matter whether Claude Code, Cursor, Aider, or a bash one-liner invoked the CLI; the same record gets written. You can `tail -f` the file from any other terminal:
+
+```sh
+tail -f ~/.local/state/helm/activity.jsonl | jq .
+```
+
+So even with the TUI closed, you have a real-time feed of what any agent is doing.
+
 ## `helm auth`
 
 Standalone CLI subcommand for non-TUI use. Reads `config.toml` + `~/.ssh/config`, recomputes the IdentityFile fingerprints helm hosts depend on, and exits with a status that reflects ssh-agent state:

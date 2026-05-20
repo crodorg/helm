@@ -4,7 +4,6 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::config::{builtin_logs, Config, Host, Log};
 use crate::engine::Engine;
-pub use crate::engine::AgentOutputLine;
 use crate::history::{HistoryStore, LineKind, LineRecord, RunSource};
 use crate::inventory::health::{self, Health, HealthResult};
 use crate::inventory::ports::{self as ports_inv, ListeningSocket};
