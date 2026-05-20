@@ -207,7 +207,9 @@ fn shell_open(args: &[String]) -> std::process::ExitCode {
     // Replace current process with `tmux new-session -A -s <session>` —
     // directly when the alias is `local`, otherwise via `ssh -t <alias>`.
     // `-A` makes new-session idempotent: attach if exists, create
-    // otherwise. Never returns on success.
+    // otherwise. Never returns on success. The remote script is wrapped
+    // with `tmux::with_remote_path` so macOS/Homebrew installs of tmux
+    // resolve under a non-interactive ssh shell.
     use std::os::unix::process::CommandExt;
     let err = if alias == tmux::LOCAL_ALIAS {
         std::process::Command::new("tmux")
@@ -217,7 +219,9 @@ fn shell_open(args: &[String]) -> std::process::ExitCode {
             .arg(&session)
             .exec()
     } else {
-        let remote = format!("tmux new-session -A -s {session}");
+        let remote = tmux::with_remote_path(&format!(
+            "tmux new-session -A -s {session}"
+        ));
         std::process::Command::new("ssh")
             .arg("-t")
             .arg(&alias)

@@ -70,10 +70,27 @@ pub fn shell_quote(s: &str) -> String {
     out
 }
 
+/// Prefix common Homebrew + MacPorts directories onto `$PATH` for the
+/// remote (or local-via-`sh -c`) shell. Non-interactive ssh sessions on
+/// macOS skip `.zshrc` and never pick up `/opt/homebrew/bin`, so a stock
+/// `ssh <mac> tmux ...` fails with `tmux: command not found` even after
+/// `brew install tmux`. Uses `export` (not the `KEY=value cmd` prefix
+/// form) so compound scripts like `tmux has-session || tmux new-session`
+/// see the augmented PATH on every branch. Idempotent on hosts that
+/// already have these dirs in `PATH`.
+pub fn with_remote_path(script: &str) -> String {
+    format!(
+        "export PATH=\"$PATH:/opt/homebrew/bin:/usr/local/bin:/opt/local/bin\"; {script}"
+    )
+}
+
 /// Build the command that runs `script` on the host identified by `alias`.
 /// For real ssh aliases this is `ssh <alias> -- <script>`; for the reserved
-/// `local` alias it's `sh -c <script>`, skipping ssh entirely.
+/// `local` alias it's `sh -c <script>`, skipping ssh entirely. The script
+/// is always wrapped with `with_remote_path` so brew-installed tools
+/// resolve even in non-interactive ssh shells.
 fn runner_cmd(alias: &str, script: &str) -> Command {
+    let script = with_remote_path(script);
     if alias == LOCAL_ALIAS {
         let mut c = Command::new("sh");
         c.arg("-c").arg(script);
@@ -278,13 +295,30 @@ mod tests {
     fn runner_cmd_local_uses_sh_dash_c() {
         let c = runner_cmd(LOCAL_ALIAS, "tmux has-session -t helm");
         assert_eq!(cmd_program(&c), "sh");
-        assert_eq!(cmd_args(&c), vec!["-c", "tmux has-session -t helm"]);
+        let args = cmd_args(&c);
+        assert_eq!(args[0], "-c");
+        assert!(args[1].contains("tmux has-session -t helm"));
+        assert!(args[1].contains("/opt/homebrew/bin"));
     }
 
     #[test]
     fn runner_cmd_remote_uses_ssh() {
         let c = runner_cmd("vps1", "tmux has-session -t helm");
         assert_eq!(cmd_program(&c), "ssh");
-        assert_eq!(cmd_args(&c), vec!["vps1", "tmux has-session -t helm"]);
+        let args = cmd_args(&c);
+        assert_eq!(args[0], "vps1");
+        assert!(args[1].contains("tmux has-session -t helm"));
+        assert!(args[1].contains("/opt/homebrew/bin"));
+    }
+
+    #[test]
+    fn with_remote_path_exports_before_script() {
+        let s = with_remote_path("tmux a || tmux b");
+        // `export` (not the `KEY=val cmd` prefix form) so both branches
+        // of a compound script inherit the augmented PATH.
+        assert!(s.starts_with("export PATH="));
+        assert!(s.contains("/opt/homebrew/bin"));
+        assert!(s.contains("tmux a || tmux b"));
+        assert!(s.contains("; tmux a"));
     }
 }
