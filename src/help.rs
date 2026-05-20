@@ -59,13 +59,14 @@ pub fn mode_title(mode: Mode) -> &'static str {
     }
 }
 
-const BROWSE: [Binding; 17] = [
+const BROWSE: [Binding; 18] = [
     b("j/k", "move"),
     b("enter", "ssh"),
     b("r", "run cmd"),
     b("R", "refresh-all overlays"),
     b("F5", "reload config.toml"),
     b("s", "services"),
+    b("S", "shell sessions"),
     b("p", "processes"),
     b("H", "health"),
     b("v", "vultr"),
