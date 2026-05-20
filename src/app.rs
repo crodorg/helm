@@ -295,6 +295,9 @@ pub enum Mode {
     LogTail,
     History,
     Dns,
+    /// Tabular list of live `helm shell` tmux sessions across every
+    /// configured ssh_alias plus the operator's `local` machine.
+    ShellSessions,
     Help,
 }
 
@@ -511,6 +514,69 @@ pub struct RunnerState {
     pub scroll: ScrollState,
 }
 
+/// One row in the sessions pane. Built from `tmux::list` output for an
+/// alias's tmux server.
+#[derive(Debug, Clone)]
+pub struct ShellSessionRow {
+    /// User-facing target, e.g. `vps1`, `vps1:deploy`, `local`, `local:agent`.
+    pub target: String,
+    pub alias: String,
+    /// Empty for the default `helm` session; otherwise the label after `:`.
+    pub label: String,
+}
+
+pub struct ShellSessionsState {
+    pub rx: Receiver<crate::ssh::collect::TmuxListResult>,
+    pub expected: usize,
+    /// Per-alias raw `tmux list-sessions` results, indexed by alias.
+    pub raw: std::collections::HashMap<String, Result<Vec<String>, String>>,
+    pub sessions: Vec<ShellSessionRow>,
+    pub selected: usize,
+}
+
+impl ShellSessionsState {
+    fn all_results_in(&self) -> bool {
+        self.raw.len() >= self.expected
+    }
+
+    fn try_compute(&mut self) {
+        if !self.all_results_in() {
+            return;
+        }
+        let mut rows: Vec<ShellSessionRow> = Vec::new();
+        // Sort aliases for deterministic display: `local` last (operator's
+        // own machine sits below the fleet).
+        let mut aliases: Vec<&String> = self.raw.keys().collect();
+        aliases.sort_by(|a, b| match (a.as_str(), b.as_str()) {
+            ("local", "local") => std::cmp::Ordering::Equal,
+            ("local", _) => std::cmp::Ordering::Greater,
+            (_, "local") => std::cmp::Ordering::Less,
+            _ => a.cmp(b),
+        });
+        for alias in aliases {
+            let Ok(targets) = self.raw.get(alias).unwrap() else {
+                continue;
+            };
+            for t in targets {
+                let (a, _session) = crate::tmux::parse_target(t);
+                let label = t
+                    .split_once(':')
+                    .map(|(_, l)| l.to_string())
+                    .unwrap_or_default();
+                rows.push(ShellSessionRow {
+                    target: t.clone(),
+                    alias: a,
+                    label,
+                });
+            }
+        }
+        self.sessions = rows;
+        if self.selected >= self.sessions.len() {
+            self.selected = self.sessions.len().saturating_sub(1);
+        }
+    }
+}
+
 pub struct ServicesState {
     pub host_alias: String,
     pub host_name: String,
@@ -611,6 +677,14 @@ pub struct App {
 
     pub dns_pane: Option<DnsState>,
 
+    pub shell_sessions: Option<ShellSessionsState>,
+    /// Hand-off target for "exec the current process into `helm shell open
+    /// <target>`". Set by the sessions pane on Enter; the main loop spots
+    /// it after restoring the terminal and replaces the helm process with
+    /// the tmux attach (so the operator's existing terminal becomes the
+    /// tmux session). Mirrors `launch_ssh`.
+    pub launch_shell: Option<String>,
+
     /// Postmark stats keyed by business name. Inserted as each thread's
     /// result arrives so the Browse detail can render partial data.
     pub postmark_results:
@@ -677,6 +751,8 @@ impl App {
             postmark_rx: None,
             postmark_fetch_attempted: false,
             engine: Engine::new(),
+            shell_sessions: None,
+            launch_shell: None,
             agent_tail_scroll: ScrollState::new_sticky(),
             vultr_scroll: ScrollState::new_top(),
         }
@@ -809,6 +885,100 @@ impl App {
     pub fn close_services(&mut self) {
         self.services = None;
         self.mode = Mode::Browse;
+    }
+
+    /// Open the Sessions pane. Fires a parallel `tmux list-sessions` against
+    /// every configured ssh_alias plus the operator's `local` machine; rows
+    /// land as each thread completes.
+    pub fn open_shell_sessions(&mut self) {
+        let aliases: Vec<String> = self
+            .config
+            .hosts
+            .iter()
+            .map(|h| h.ssh_alias.clone())
+            .collect();
+        let (expected, rx) = crate::ssh::collect::spawn_tmux_list_all(aliases);
+        self.mode = Mode::ShellSessions;
+        self.shell_sessions = Some(ShellSessionsState {
+            rx,
+            expected,
+            raw: std::collections::HashMap::new(),
+            sessions: Vec::new(),
+            selected: 0,
+        });
+    }
+
+    pub fn refresh_shell_sessions(&mut self) {
+        if self.shell_sessions.is_some() {
+            self.open_shell_sessions();
+        }
+    }
+
+    pub fn close_shell_sessions(&mut self) {
+        self.shell_sessions = None;
+        self.mode = Mode::Browse;
+    }
+
+    pub fn ingest_shell_sessions_events(&mut self) {
+        let Some(s) = self.shell_sessions.as_mut() else {
+            return;
+        };
+        while let Ok(res) = s.rx.try_recv() {
+            s.raw.insert(res.alias, res.output);
+        }
+        s.try_compute();
+    }
+
+    /// Move the selection cursor in the sessions pane.
+    pub fn shell_sessions_select_next(&mut self) {
+        if let Some(s) = self.shell_sessions.as_mut() {
+            if !s.sessions.is_empty() {
+                s.selected = (s.selected + 1) % s.sessions.len();
+            }
+        }
+    }
+
+    pub fn shell_sessions_select_prev(&mut self) {
+        if let Some(s) = self.shell_sessions.as_mut() {
+            if !s.sessions.is_empty() {
+                if s.selected == 0 {
+                    s.selected = s.sessions.len() - 1;
+                } else {
+                    s.selected -= 1;
+                }
+            }
+        }
+    }
+
+    /// Hand off to `helm shell open <target>` — main loop detects the
+    /// stashed target after the next tick and execs into tmux attach.
+    pub fn open_selected_shell_session(&mut self) {
+        let Some(s) = self.shell_sessions.as_ref() else {
+            return;
+        };
+        if let Some(row) = s.sessions.get(s.selected) {
+            self.launch_shell = Some(row.target.clone());
+        } else {
+            self.status = "no session selected".into();
+        }
+    }
+
+    /// Ensure the selected session exists (idempotent) but stay in the
+    /// TUI. Lets the operator pre-create a session they intend to attach
+    /// to from a different terminal later.
+    pub fn detach_selected_shell_session(&mut self) {
+        let Some(s) = self.shell_sessions.as_ref() else {
+            return;
+        };
+        let Some(row) = s.sessions.get(s.selected) else {
+            self.status = "no session selected".into();
+            return;
+        };
+        let target = row.target.clone();
+        match crate::tmux::ensure_session(&target) {
+            Ok(()) => self.status = format!("session ready: helm shell open {target}"),
+            Err(e) => self.status = format!("session error: {e}"),
+        }
     }
 
     pub fn open_processes(&mut self) {

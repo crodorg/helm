@@ -10,6 +10,7 @@ mod money;
 mod processes;
 mod runner;
 mod services;
+mod shell_sessions;
 mod shortcuts;
 #[cfg(test)]
 mod snapshots;
@@ -59,6 +60,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         Mode::LogTail => log_tail::draw(f, chunks[1], app),
         Mode::History => history::draw(f, chunks[1], app),
         Mode::Dns => dns::draw(f, chunks[1], app),
+        Mode::ShellSessions => shell_sessions::draw(f, chunks[1], app),
         Mode::Help => {
             // Render the underlying mode beneath, then overlay the help modal.
             // Re-dispatch by what the user opened it from.
@@ -76,6 +78,7 @@ pub fn draw(f: &mut Frame, app: &App) {
                 Some(Mode::LogTail) => log_tail::draw(f, chunks[1], app),
                 Some(Mode::History) => history::draw(f, chunks[1], app),
                 Some(Mode::Dns) => dns::draw(f, chunks[1], app),
+                Some(Mode::ShellSessions) => shell_sessions::draw(f, chunks[1], app),
                 Some(Mode::Help) => browse::draw(f, chunks[1], app),
             }
             help::draw(f, chunks[1], app);
@@ -99,6 +102,7 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
         Mode::LogTail => " logs ",
         Mode::History => " history ",
         Mode::Dns => " dns ",
+        Mode::ShellSessions => " sessions ",
         Mode::Help => " help ",
     };
     let agent_active = app.engine.agent_active.is_some();

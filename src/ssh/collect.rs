@@ -124,6 +124,37 @@ pub fn spawn_processes_and_ports(alias: &str) -> Receiver<InvResult> {
     rx
 }
 
+#[derive(Debug)]
+pub struct TmuxListResult {
+    pub alias: String,
+    pub output: Result<Vec<String>, String>,
+}
+
+/// Fan out `tmux list-sessions` queries across every alias in `aliases` plus
+/// the reserved `local` alias. Each thread runs `tmux::list(alias)` (which
+/// shells out to ssh for remote aliases and `sh -c` for `local`) and sends a
+/// single `TmuxListResult`. Returns `(total_count, receiver)` so the caller
+/// can know when all results have arrived.
+///
+/// Used by the sessions TUI pane to enumerate `helm-*` sessions across the
+/// fleet in parallel.
+pub fn spawn_tmux_list_all(aliases: Vec<String>) -> (usize, Receiver<TmuxListResult>) {
+    let (tx, rx) = channel();
+    let mut all = aliases;
+    if !all.iter().any(|a| a == crate::tmux::LOCAL_ALIAS) {
+        all.push(crate::tmux::LOCAL_ALIAS.to_string());
+    }
+    let count = all.len();
+    for alias in all {
+        let tx = tx.clone();
+        thread::spawn(move || {
+            let output = crate::tmux::list(&alias).map_err(|e| format!("{e}"));
+            let _ = tx.send(TmuxListResult { alias, output });
+        });
+    }
+    (count, rx)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,5 +164,27 @@ mod tests {
         assert_eq!(Slot::On.subcommand(), "on");
         assert_eq!(Slot::Started.subcommand(), "started");
         assert_eq!(Slot::Failed.subcommand(), "failed");
+    }
+
+    #[test]
+    fn spawn_tmux_list_all_adds_local_when_missing() {
+        // Use bogus aliases so ssh fails fast — we only care about the
+        // total count + that `local` is included.
+        let (count, rx) = spawn_tmux_list_all(vec!["bogus-alias-zzz".into()]);
+        assert_eq!(count, 2, "expected user alias + auto-added local");
+        let mut aliases = Vec::new();
+        for _ in 0..count {
+            if let Ok(r) = rx.recv() {
+                aliases.push(r.alias);
+            }
+        }
+        aliases.sort();
+        assert_eq!(aliases, vec!["bogus-alias-zzz", "local"]);
+    }
+
+    #[test]
+    fn spawn_tmux_list_all_keeps_explicit_local() {
+        let (count, _rx) = spawn_tmux_list_all(vec!["local".into()]);
+        assert_eq!(count, 1, "local already present should not be doubled");
     }
 }

@@ -6,7 +6,7 @@
 //! - `vps1`         → ssh to `vps1`, tmux session name `helm`
 //! - `vps1:deploy`  → ssh to `vps1`, tmux session name `helm-deploy`
 //! - `local`        → operator's machine, tmux session name `helm`
-//! - `local:claude` → operator's machine, tmux session name `helm-claude`
+//! - `local:agent`  → operator's machine, tmux session name `helm-agent`
 //!
 //! The reserved alias `local` short-circuits ssh and runs tmux directly on
 //! the operator's machine. Use cases: a shell that needs interactive doas
@@ -179,7 +179,7 @@ pub fn capture(target: &str, lines: u32) -> Result<String> {
 
 /// List helm-* sessions on the given alias's tmux server. Returns the
 /// user-facing target form for each (e.g. `vps1`, `vps1:deploy`, `local`,
-/// `local:claude`).
+/// `local:agent`).
 pub fn list(alias: &str) -> Result<Vec<String>> {
     let remote = "tmux list-sessions -F '#{session_name}' 2>/dev/null || true";
     let out = runner_cmd(alias, remote)

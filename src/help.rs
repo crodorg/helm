@@ -34,6 +34,7 @@ pub fn bindings_for(mode: Mode, focus: Option<InputFocus>) -> &'static [Binding]
         (Mode::LogTail, _) => &LOG_TAIL,
         (Mode::History, _) => &HISTORY,
         (Mode::Dns, _) => &DNS,
+        (Mode::ShellSessions, _) => &SHELL_SESSIONS,
         (Mode::Help, _) => &HELP,
     }
 }
@@ -53,6 +54,7 @@ pub fn mode_title(mode: Mode) -> &'static str {
         Mode::LogTail => "logs",
         Mode::History => "history",
         Mode::Dns => "dns",
+        Mode::ShellSessions => "sessions",
         Mode::Help => "help",
     }
 }
@@ -183,6 +185,16 @@ const DNS: [Binding; 5] = [
     b("h/esc", "back"),
 ];
 
+const SHELL_SESSIONS: [Binding; 7] = [
+    b("j/k", "move"),
+    b("enter", "open (exec into terminal)"),
+    b("d", "ensure detached"),
+    b("r", "refresh"),
+    b("?", "help"),
+    b("h/esc", "back"),
+    b("q", "back"),
+];
+
 const HELP: [Binding; 3] = [
     b("?", "close"),
     b("esc", "close"),
@@ -209,6 +221,7 @@ mod tests {
             Mode::LogTail,
             Mode::History,
             Mode::Dns,
+            Mode::ShellSessions,
             Mode::Help,
         ] {
             assert!(!bindings_for(m, None).is_empty(), "no bindings for {m:?}");
@@ -231,6 +244,7 @@ mod tests {
             Mode::LogTail,
             Mode::History,
             Mode::Dns,
+            Mode::ShellSessions,
         ] {
             assert!(
                 bindings_for(m, None).iter().any(|b| b.key == "?"),

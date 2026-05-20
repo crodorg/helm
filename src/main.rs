@@ -764,6 +764,7 @@ fn run(terminal: &mut Term, app: &mut App) -> Result<()> {
     while !app.should_quit {
         app.ingest_run_events();
         app.ingest_services_events();
+        app.ingest_shell_sessions_events();
         app.ingest_processes_events();
         app.ingest_health_events();
         app.ingest_vultr_events();
@@ -790,6 +791,9 @@ fn run(terminal: &mut Term, app: &mut App) -> Result<()> {
 
         if let Some(alias) = app.launch_ssh.take() {
             run_ssh(terminal, app, &alias)?;
+        }
+        if let Some(target) = app.launch_shell.take() {
+            run_shell_session(terminal, app, &target)?;
         }
     }
     Ok(())
@@ -844,7 +848,22 @@ fn handle_key(app: &mut App, code: KeyCode) {
         Mode::LogTail => handle_log_tail(app, code),
         Mode::History => handle_history(app, code),
         Mode::Dns => handle_dns(app, code),
+        Mode::ShellSessions => handle_shell_sessions(app, code),
         Mode::Help => handle_help(app, code),
+    }
+}
+
+fn handle_shell_sessions(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('h') => {
+            app.close_shell_sessions()
+        }
+        KeyCode::Char('j') | KeyCode::Down => app.shell_sessions_select_next(),
+        KeyCode::Char('k') | KeyCode::Up => app.shell_sessions_select_prev(),
+        KeyCode::Enter => app.open_selected_shell_session(),
+        KeyCode::Char('d') => app.detach_selected_shell_session(),
+        KeyCode::Char('r') => app.refresh_shell_sessions(),
+        _ => {}
     }
 }
 
@@ -1027,6 +1046,7 @@ fn handle_browse(app: &mut App, code: KeyCode) {
         KeyCode::Enter => app.request_ssh(),
         KeyCode::Char('r') => app.open_runner(),
         KeyCode::Char('s') => app.open_services(),
+        KeyCode::Char('S') => app.open_shell_sessions(),
         KeyCode::Char('p') => app.open_processes(),
         KeyCode::Char('H') => app.open_health(),
         KeyCode::Char('v') => app.open_vultr(),
@@ -1244,6 +1264,37 @@ fn run_ssh(terminal: &mut Term, app: &mut App, alias: &str) -> Result<()> {
         Ok(s) if s.success() => app.status = format!("ssh {alias} ok"),
         Ok(s) => app.status = format!("ssh {alias} exit {}", s.code().unwrap_or(-1)),
         Err(e) => app.status = format!("ssh {alias} failed: {e}"),
+    }
+    Ok(())
+}
+
+/// Drop the TUI and run `helm shell open <target>` in the foreground. On
+/// tmux detach / exit, we re-enter the TUI. Uses `current_exe()` so a
+/// non-PATH helm binary (e.g. dev `target/release/helm`) hands off to
+/// itself rather than `$PATH`'s helm.
+fn run_shell_session(terminal: &mut Term, app: &mut App, target: &str) -> Result<()> {
+    restore_terminal(terminal)?;
+
+    let exe = std::env::current_exe()
+        .unwrap_or_else(|_| std::path::PathBuf::from("helm"));
+    let status = Command::new(exe)
+        .arg("shell")
+        .arg("open")
+        .arg(target)
+        .status();
+
+    enable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        EnterAlternateScreen,
+        EnableMouseCapture
+    )?;
+    terminal.clear()?;
+
+    match status {
+        Ok(s) if s.success() => app.status = format!("shell {target} ok"),
+        Ok(s) => app.status = format!("shell {target} exit {}", s.code().unwrap_or(-1)),
+        Err(e) => app.status = format!("shell {target} failed: {e}"),
     }
     Ok(())
 }
