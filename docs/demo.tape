@@ -1,16 +1,19 @@
 # helm demo — sessions pane + shell open round-trip
 #
 # Render with `vhs docs/demo.tape` (requires vhs, ttyd, and a chromium-class
-# browser; install via `brew install vhs` on macOS — bundles its own
-# Chromium via Playwright).
+# browser; `xbps-install vhs ttyd` on Void; `brew install vhs` on macOS
+# bundles Playwright Chromium).
 #
 # Output GIF lands at docs/demo.gif and is referenced from README.md.
 #
 # Pre-conditions for re-recording:
 #   1. `helm` is on $PATH (the symlink at ~/bin/helm works)
-#   2. ssh-agent is loaded with whichever keys your `config.toml` references
-#   3. The `mac` (or whichever) Host alias in ~/.ssh/config is reachable
-#   4. Run `helm daemon stop` first if anything else is using the socket
+#   2. `tmux` is installed (helm shells out to it for the local sessions)
+#
+# The recording sandboxes itself in /tmp/helm-vhs-demo so the operator's
+# real ~/.config/helm/config.toml never appears on screen. The sanitized
+# config at docs/demo-config.toml is what helm actually loads during the
+# recording.
 
 Output docs/demo.gif
 
@@ -24,14 +27,19 @@ Set PlaybackSpeed 1.0
 Set Padding 16
 Set Theme "Catppuccin Mocha"
 
-# Pre-seed two `local` sessions so the sessions pane has rows to show.
+# Bootstrap: cd into a sandbox holding only the sanitized demo config, and
+# point tmux at an isolated server socket so the operator's real tmux
+# sessions never appear in the GIF.
 Hide
+Type "REPO=$(pwd) && mkdir -p /tmp/helm-vhs-demo && cp $REPO/docs/demo-config.toml /tmp/helm-vhs-demo/config.toml && cd /tmp/helm-vhs-demo && export TMUX_TMPDIR=/tmp/helm-vhs-demo"
+Enter
+Sleep 300ms
 Type "helm shell open -d local:edit"
 Enter
-Sleep 200ms
+Sleep 400ms
 Type "helm shell open -d local:tail"
 Enter
-Sleep 200ms
+Sleep 400ms
 Type "clear"
 Enter
 Sleep 200ms

@@ -1,0 +1,34 @@
+# helm demo config — used by docs/demo.tape only.
+#
+# This file is copied to a temp directory and renamed `config.toml` before
+# vhs runs `helm`. Real configs (with personal hostnames / IPs) never go
+# anywhere near the recording.
+
+auto_daemon = false
+
+[[hosts]]
+name = "web"
+ssh_alias = "web"
+provider = "vultr"
+hostname = "web.example.com"
+user = "admin"
+notes = "OpenBSD application host"
+
+[[hosts]]
+name = "db"
+ssh_alias = "db"
+provider = "vultr"
+hostname = "db.example.com"
+user = "admin"
+notes = "OpenBSD database host"
+
+[[hosts]]
+name = "router"
+ssh_alias = "router"
+provider = "local"
+hostname = "192.0.2.1"
+user = "admin"
+notes = "OpenBSD edge router"
+
+[ssh_config]
+enabled = false

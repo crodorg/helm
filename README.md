@@ -2,6 +2,8 @@
 
 **An AI agent and I share the same tmux pane. Here's the discipline — and the CLI that enforces it.**
 
+![helm demo — sessions pane + detached-ensure](docs/demo.gif)
+
 > Three rules every interaction obeys. The agent never breaks them, and neither do I.
 
 - **Read before send.** Every interaction starts with `helm shell read <alias>` to confirm the pane is at a clean prompt — not mid-command, not inside `vim`, not staring at a password prompt. Blind sends are forbidden.
