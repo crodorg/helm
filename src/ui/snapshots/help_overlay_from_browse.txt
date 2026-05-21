@@ -3,7 +3,7 @@
 │               │press [?] or [esc] to close                   │ample.toml     │
 │               │                                              │               │
 │               │ [j/k]    move                                │               │
-│               │ [enter]  ssh                                 │               │
+│               │ [enter]  helm shell                          │               │
 │               │ [r]      run cmd                             │               │
 │               │ [R]      refresh-all overlays                │               │
 │               │ [F5]     reload config.toml                  │               │

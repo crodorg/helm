@@ -6,7 +6,7 @@
 └──────────────────────────┘│                                                  │
 ┌ keys (?) ────────────────┐│                                                  │
 │ [j/k]    move            ││                                                  │
-│ [enter]  ssh             ││                                                  │
+│ [enter]  helm shell      ││                                                  │
 │ [r]      run cmd         ││                                                  │
 │ [R]      refresh-all over││                                                  │
 │ [F5]     reload config.to││                                                  │

@@ -949,9 +949,6 @@ fn run(terminal: &mut Term, app: &mut App) -> Result<()> {
             }
         }
 
-        if let Some(alias) = app.launch_ssh.take() {
-            run_ssh(terminal, app, &alias)?;
-        }
         if let Some(target) = app.launch_shell.take() {
             run_shell_session(terminal, app, &target)?;
         }
@@ -1203,7 +1200,7 @@ fn handle_browse(app: &mut App, code: KeyCode) {
         KeyCode::Char('q') | KeyCode::Esc => app.quit(),
         KeyCode::Char('j') | KeyCode::Down => app.next_host(),
         KeyCode::Char('k') | KeyCode::Up => app.prev_host(),
-        KeyCode::Enter => app.request_ssh(),
+        KeyCode::Enter => app.request_helm_shell(),
         KeyCode::Char('r') => app.open_runner(),
         KeyCode::Char('s') => app.open_services(),
         KeyCode::Char('S') => app.open_shell_sessions(),
@@ -1405,27 +1402,6 @@ fn unix_now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
-}
-
-fn run_ssh(terminal: &mut Term, app: &mut App, alias: &str) -> Result<()> {
-    restore_terminal(terminal)?;
-
-    let status = Command::new("ssh").arg(alias).status();
-
-    enable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        EnterAlternateScreen,
-        EnableMouseCapture
-    )?;
-    terminal.clear()?;
-
-    match status {
-        Ok(s) if s.success() => app.status = format!("ssh {alias} ok"),
-        Ok(s) => app.status = format!("ssh {alias} exit {}", s.code().unwrap_or(-1)),
-        Err(e) => app.status = format!("ssh {alias} failed: {e}"),
-    }
-    Ok(())
 }
 
 /// Drop the TUI and run `helm shell open <target>` in the foreground. On

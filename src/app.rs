@@ -629,7 +629,6 @@ pub struct App {
     pub selected: usize,
     pub status: String,
     pub should_quit: bool,
-    pub launch_ssh: Option<String>,
     pub mode: Mode,
     pub help_origin: Option<Mode>,
     /// Money pane filter. `None` = all rows; `Some(idx)` = show only
@@ -723,7 +722,6 @@ impl App {
             selected: 0,
             status: String::new(),
             should_quit: false,
-            launch_ssh: None,
             mode: Mode::Browse,
             help_origin: None,
             money_filter: None,
@@ -814,9 +812,15 @@ impl App {
         }
     }
 
-    pub fn request_ssh(&mut self) {
+    /// Browse's Enter behavior: attach the operator's terminal to the
+    /// host's default `helm` tmux session, *not* a raw ssh shell. That
+    /// way every command the operator types is visible to any AI agent
+    /// using `helm shell read <alias>` — the operator and the agent
+    /// share one persistent pane. Use plain `ssh <alias>` from your own
+    /// shell when you specifically want an unshared session.
+    pub fn request_helm_shell(&mut self) {
         if let Some(h) = self.selected_host() {
-            self.launch_ssh = Some(h.ssh_alias.clone());
+            self.launch_shell = Some(h.ssh_alias.clone());
         }
     }
 

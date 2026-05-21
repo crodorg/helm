@@ -61,7 +61,7 @@ pub fn mode_title(mode: Mode) -> &'static str {
 
 const BROWSE: [Binding; 18] = [
     b("j/k", "move"),
-    b("enter", "ssh"),
+    b("enter", "helm shell"),
     b("r", "run cmd"),
     b("R", "refresh-all overlays"),
     b("F5", "reload config.toml"),
