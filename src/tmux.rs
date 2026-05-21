@@ -9,7 +9,7 @@
 //! - `local:agent`  → operator's machine, tmux session name `helm-agent`
 //!
 //! The reserved alias `local` short-circuits ssh and runs tmux directly on
-//! the operator's machine. Use cases: a shell that needs interactive doas
+//! the operator's machine. Use cases: a shell that needs interactive doas/sudo
 //! password entry, or a separate command history from the operator's own
 //! shell. Each ssh'd host has its own tmux server; locally there's one.
 //! Session names don't need to include the alias for uniqueness — the

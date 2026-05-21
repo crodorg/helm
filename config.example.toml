@@ -17,7 +17,7 @@
 [[hosts]]
 name = "router"
 ssh_alias = "router"          # entry in ~/.ssh/config
-provider = "local"            # local | vultr | buyvm | unknown
+provider = "local"            # local | vultr | unknown
 os = "openbsd"                # openbsd | debian | macos — drives the Services pane
 hostname = "192.168.1.1"
 user = "admin"

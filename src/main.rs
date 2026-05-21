@@ -115,7 +115,7 @@ fn print_auth_help() {
 Reads your `config.toml` and `~/.ssh/config`, computes the set of
 IdentityFile fingerprints helm hosts depend on, and checks whether
 ssh-agent already holds them. Designed to be wired into login shells or
-doas wrappers via its exit code:
+sudo/doas wrappers via its exit code:
 
   exit 0  agent reachable and every key is loaded
   exit 1  one of: agent unreachable, key missing, ssh-add not on PATH
@@ -137,7 +137,7 @@ fn print_shell_help() {
 Sessions live on the chosen host. Each `<target>` is `<alias>` (default
 session `helm`) or `<alias>:<label>` (session `helm-<label>`). The
 reserved alias `local` runs against your own machine instead of ssh —
-use it for shells that need interactive doas password entry or a
+use it for shells that need interactive doas/sudo password entry or a
 separate history from your own terminal. Persistence survives helm
 restarts, network drops, and operator-machine reboots for remote
 sessions; local sessions survive until your machine reboots or its

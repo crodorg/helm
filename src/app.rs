@@ -1339,6 +1339,7 @@ impl App {
             return Vec::new();
         };
         let alias = host.ssh_alias.clone();
+        let os = host.os;
         let mut out: Vec<Log> = self
             .config
             .logs
@@ -1346,7 +1347,7 @@ impl App {
             .filter(|l| l.applies_to(&alias))
             .cloned()
             .collect();
-        for d in builtin_logs() {
+        for d in builtin_logs(os) {
             if !out.iter().any(|l| l.key == d.key) {
                 out.push(d);
             }

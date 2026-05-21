@@ -44,29 +44,38 @@ impl Log {
     }
 }
 
-/// Built-in OpenBSD log defaults — always shown in the picker so a fresh
-/// install with no `[[logs]]` config still has something useful on `l`.
-pub fn builtin_logs() -> Vec<Log> {
-    vec![
-        Log {
-            key: 'm',
-            label: "messages".into(),
-            path: "/var/log/messages".into(),
-            hosts: Vec::new(),
-        },
-        Log {
-            key: 'd',
-            label: "daemon".into(),
-            path: "/var/log/daemon".into(),
-            hosts: Vec::new(),
-        },
-        Log {
-            key: 'a',
-            label: "authlog".into(),
-            path: "/var/log/authlog".into(),
-            hosts: Vec::new(),
-        },
-    ]
+/// Per-OS built-in log defaults — always shown in the picker for the
+/// selected host so a fresh install with no `[[logs]]` config still has
+/// something useful on `l`. Tail paths are conservative — they all
+/// exist out of the box on the listed OS — but the operator is expected
+/// to add their own `[[logs]]` entries for app-specific files.
+pub fn builtin_logs(os: OsFamily) -> Vec<Log> {
+    match os {
+        OsFamily::Openbsd => vec![
+            log_entry('m', "messages", "/var/log/messages"),
+            log_entry('d', "daemon", "/var/log/daemon"),
+            log_entry('a', "authlog", "/var/log/authlog"),
+        ],
+        OsFamily::Debian => vec![
+            log_entry('s', "syslog", "/var/log/syslog"),
+            log_entry('a', "auth", "/var/log/auth.log"),
+            log_entry('k', "kern", "/var/log/kern.log"),
+        ],
+        OsFamily::Macos => vec![
+            log_entry('s', "system", "/var/log/system.log"),
+            log_entry('i', "install", "/var/log/install.log"),
+            log_entry('w', "wifi", "/var/log/wifi.log"),
+        ],
+    }
+}
+
+fn log_entry(key: char, label: &str, path: &str) -> Log {
+    Log {
+        key,
+        label: label.into(),
+        path: path.into(),
+        hosts: Vec::new(),
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -76,7 +85,7 @@ pub struct Shortcut {
     /// Human label shown in the palette and history.
     pub label: String,
     /// The actual remote command. Runs through the existing Runner, so
-    /// `doas` prompts surface the password modal.
+    /// `doas` / `sudo` prompts surface the password modal.
     pub cmd: String,
     /// ssh_alias values this shortcut applies to. Empty = applies to every
     /// host. Helm filters the palette by the currently selected host.
@@ -124,7 +133,6 @@ impl Host {
 pub enum Provider {
     Local,
     Vultr,
-    Buyvm,
     #[default]
     Unknown,
 }
@@ -153,7 +161,6 @@ impl Provider {
         match self {
             Provider::Local => "LOCAL",
             Provider::Vultr => "VULTR",
-            Provider::Buyvm => "BUYVM",
             Provider::Unknown => "  ?  ",
         }
     }
