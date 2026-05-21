@@ -123,6 +123,14 @@ pub fn append(record: &ActivityRecord) {
     };
     if let Err(e) = writeln!(file, "{line}") {
         eprintln!("helm: activity write: {e}");
+        return;
+    }
+    // Force the buffered line out to the OS so a subsequent SIGKILL /
+    // panic / OOM-killer can't lose the audit entry. `flush()` on a File
+    // is a no-op (no Rust-level buffering) but `sync_data()` issues an
+    // fdatasync — the actual durability guarantee for an audit log.
+    if let Err(e) = file.sync_data() {
+        eprintln!("helm: activity sync: {e}");
     }
 }
 
@@ -136,11 +144,24 @@ pub fn tail(limit: usize) -> Vec<ActivityRecord> {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
-    let mut out: Vec<ActivityRecord> = raw
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .filter_map(|l| serde_json::from_str(l).ok())
-        .collect();
+    let mut out: Vec<ActivityRecord> = Vec::new();
+    for (i, line) in raw.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<ActivityRecord>(line) {
+            Ok(r) => out.push(r),
+            Err(e) => {
+                // Don't drop silently — surface to stderr so the
+                // operator notices half-written / corrupted entries
+                // that would otherwise vanish from the audit pane.
+                eprintln!(
+                    "helm: activity tail: skipping malformed line {} ({e})",
+                    i + 1
+                );
+            }
+        }
+    }
     if out.len() > limit {
         let drop = out.len() - limit;
         out.drain(0..drop);
@@ -238,6 +259,15 @@ mod tests {
     fn privilege_escalation_no_false_positive_on_substring() {
         assert!(!has_privilege_escalation("echo pseudoscience"));
         assert!(!has_privilege_escalation("undoasked"));
+        assert!(!has_privilege_escalation("doasync"));
+        assert!(!has_privilege_escalation("sudoers"));
+    }
+
+    #[test]
+    fn privilege_escalation_across_newlines() {
+        assert!(has_privilege_escalation("echo first\ndoas reboot"));
+        assert!(has_privilege_escalation("ls\n\nsudo apt update"));
+        assert!(!has_privilege_escalation("echo first\nls /tmp"));
     }
 
     #[test]

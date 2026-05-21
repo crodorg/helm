@@ -44,9 +44,20 @@ impl RunHandle {
 
 /// Spawn `ssh -tt <alias> <cmd>` for remote aliases, or `sh -c <cmd>` for
 /// the reserved `local` alias, returning a handle that streams output
-/// asynchronously via mpsc. `-tt` forces a remote PTY so `doas` writes its
-/// password prompt to a fd we can see; the local branch inherits the
-/// caller's TTY situation via `sh`.
+/// asynchronously via mpsc.
+///
+/// `-tt` forces a remote PTY so `doas` / `sudo` writes its password
+/// prompt to a fd we can see, and the password modal can answer it.
+///
+/// The **local** branch does *not* allocate a PTY. `doas` / `sudo` on
+/// the operator's own machine will try to read from `/dev/tty` directly,
+/// bypassing helm entirely — the prompt may surface in whichever
+/// terminal originally launched helm, but the password modal can't
+/// answer it. For interactive privilege escalation on `local`, use
+/// `helm shell open local:scratch` instead (real tmux pane, real TTY)
+/// rather than `helm exec local`. `helm exec local` is best suited to
+/// non-interactive commands and to `doas`/`sudo` invocations whose
+/// credentials are already cached (default 5-minute window).
 pub fn spawn_remote(alias: &str, cmd: &str) -> std::io::Result<RunHandle> {
     let mut child = if alias == crate::tmux::LOCAL_ALIAS {
         Command::new("sh")

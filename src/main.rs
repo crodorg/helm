@@ -449,7 +449,17 @@ fn run_exec_cli(args: &[String]) -> std::process::ExitCode {
         "",
         Some(exit),
     );
-    let c: u8 = if (0..=255).contains(&exit) { exit as u8 } else { 1 };
+    // Map any out-of-range exit (including negatives from signal deaths,
+    // which the server reports as -1) to the conventional "command died
+    // abnormally" code 130. Wrapping silently to 255 via `as u8` would
+    // collide with the legitimate "argument list too long" exit on most
+    // shells; 130 ("Ctrl-C") is the closest semantic match to the
+    // underlying signal death we lose by serializing through u8.
+    let c: u8 = if (0..=255).contains(&exit) {
+        exit as u8
+    } else {
+        130
+    };
     std::process::ExitCode::from(c)
 }
 

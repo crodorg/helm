@@ -68,32 +68,45 @@ pub fn spawn_services(alias: &str, os: OsFamily) -> Receiver<ServicesResult> {
 }
 
 fn collect_rcctl(alias: &str) -> Result<Vec<Service>, String> {
-    let mut on = String::new();
-    let mut started = String::new();
-    let mut failed = String::new();
+    // Three parallel ssh threads — `rcctl ls started|failed` each call
+    // `_rc_check` per service, which is slow over the wire. Serializing
+    // them tripled pane latency in practice. Each thread joins via the
+    // mpsc channel; the parent collects all three before computing.
+    let (tx, rx) = channel::<(Slot, Result<String, String>)>();
     for slot in [Slot::On, Slot::Started, Slot::Failed] {
-        let sub = slot.subcommand();
-        match Command::new("ssh")
-            .arg(alias)
-            .arg(format!("doas -n rcctl ls {sub}"))
-            .output()
-        {
-            Ok(o) if o.status.success() => {
-                let s = String::from_utf8_lossy(&o.stdout).into_owned();
-                match slot {
-                    Slot::On => on = s,
-                    Slot::Started => started = s,
-                    Slot::Failed => failed = s,
+        let alias = alias.to_string();
+        let tx = tx.clone();
+        thread::spawn(move || {
+            let sub = slot.subcommand();
+            let out = match Command::new("ssh")
+                .arg(&alias)
+                .arg(format!("doas -n rcctl ls {sub}"))
+                .output()
+            {
+                Ok(o) if o.status.success() => {
+                    Ok(String::from_utf8_lossy(&o.stdout).into_owned())
                 }
-            }
-            Ok(o) => {
-                return Err(format!(
+                Ok(o) => Err(format!(
                     "doas -n rcctl ls {sub} exit {}: {}",
                     o.status.code().unwrap_or(-1),
                     String::from_utf8_lossy(&o.stderr).trim()
-                ));
-            }
-            Err(e) => return Err(format!("spawn ssh failed: {e}")),
+                )),
+                Err(e) => Err(format!("spawn ssh failed: {e}")),
+            };
+            let _ = tx.send((slot, out));
+        });
+    }
+    drop(tx);
+    let mut on = String::new();
+    let mut started = String::new();
+    let mut failed = String::new();
+    for _ in 0..3 {
+        let (slot, out) = rx.recv().map_err(|e| format!("rcctl channel: {e}"))?;
+        let s = out?;
+        match slot {
+            Slot::On => on = s,
+            Slot::Started => started = s,
+            Slot::Failed => failed = s,
         }
     }
     Ok(parse_rcctl(&on, &started, &failed))
