@@ -94,7 +94,8 @@ fn draw_hosts(f: &mut Frame, area: Rect, app: &App) {
         .block(Block::default().borders(Borders::ALL).title("hosts"))
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .fg(Color::Black)
+                .bg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▶ ");

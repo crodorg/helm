@@ -86,25 +86,32 @@ fn draw_body(f: &mut Frame, area: Rect, s: &ShellSessionsState) {
         .enumerate()
         .map(|(i, row)| {
             let selected = i == s.selected;
-            let style = if selected {
-                Style::default()
+            let alias_pad = format!("{:<16}", row.alias);
+            if selected {
+                // High-contrast inverse video for the entire row so the
+                // selection isn't dependent on the terminal's theme palette
+                // matching what each column's fg color happens to be.
+                let style = Style::default()
                     .fg(Color::Black)
                     .bg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::BOLD);
+                ListItem::new(Line::from(vec![
+                    Span::styled(alias_pad, style),
+                    Span::styled(" ", style),
+                    Span::styled(row.target.clone(), style),
+                ]))
             } else {
-                Style::default()
-            };
-            let alias_color = if row.alias == crate::tmux::LOCAL_ALIAS {
-                Color::Cyan
-            } else {
-                Color::Magenta
-            };
-            let alias_pad = format!("{:<16}", row.alias);
-            ListItem::new(Line::from(vec![
-                Span::styled(alias_pad, Style::default().fg(alias_color)),
-                Span::raw(" "),
-                Span::styled(row.target.clone(), style),
-            ]))
+                let alias_color = if row.alias == crate::tmux::LOCAL_ALIAS {
+                    Color::Cyan
+                } else {
+                    Color::Magenta
+                };
+                ListItem::new(Line::from(vec![
+                    Span::styled(alias_pad, Style::default().fg(alias_color)),
+                    Span::raw(" "),
+                    Span::raw(row.target.clone()),
+                ]))
+            }
         })
         .collect();
     let list = List::new(rows);

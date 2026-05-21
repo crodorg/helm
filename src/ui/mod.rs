@@ -106,10 +106,10 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
         Mode::Help => " help ",
     };
     let agent_active = app.engine.agent_active.is_some();
-    let agent_chip_bg = if agent_active {
-        Color::Yellow
+    let (agent_fg, agent_bg) = if agent_active {
+        (Color::Black, Color::Yellow)
     } else {
-        Color::DarkGray
+        (Color::White, Color::DarkGray)
     };
     let p = Paragraph::new(Line::from(vec![
         Span::styled(
@@ -128,8 +128,8 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
         Span::styled(
             format!(" {} ", app.engine.agent_indicator()),
             Style::default()
-                .fg(Color::Black)
-                .bg(agent_chip_bg)
+                .fg(agent_fg)
+                .bg(agent_bg)
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
