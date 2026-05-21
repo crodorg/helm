@@ -10,7 +10,7 @@
 # CLIs, a working DNS resolver chain, etc.). Disabled panes don't show up
 # in the Browse keys palette or the help overlay.
 [features]
-health = false      # `H` — uptime / load / disk / mem per host
+health = false      # `H` — HTTPS reachability + TLS expiry per business
 vultr  = false      # `v` — Vultr instance overlay (needs $VULTR_API_KEY)
 dns    = false      # `d` — per-business A/AAAA/MX/CAA table
 money  = false      # `m` — Stripe + Mercury balances via printing-press CLIs

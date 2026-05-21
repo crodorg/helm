@@ -335,7 +335,7 @@ The Browse pane ships several side panes that are only useful when their backing
 
 ```toml
 [features]
-health = false   # H — uptime / load / disk / mem per host
+health = false   # H — HTTPS reachability + TLS expiry per business
 vultr  = false   # v — Vultr instance overlay (needs $VULTR_API_KEY)
 dns    = false   # d — per-business A / AAAA / MX / CAA table
 money  = false   # m — Stripe + Mercury balances (needs pp CLIs)
