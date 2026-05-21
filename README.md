@@ -345,6 +345,21 @@ Disabled panes are hidden from the Browse keys palette **and** the help overlay,
 
 Always-on panes (services `s`, sessions `S`, processes `p`, logs `l`, history `t`, shortcuts `a`, agent activity `c`, runner `r`) need no flag — they work against any host with ssh + tmux + (for services) the right init system.
 
+### What's a "business" in helm?
+
+Three of the optional panes (`health`, `dns`, `money`) iterate `[[businesses]]` entries in `config.toml`. "Business" is just helm's noun for **any named thing with a domain** — personal site, side project, brochureware, OSS landing page, your blog, a forum you run for fun. Nothing in the code requires money, employees, or a tax ID. The naming is historical (helm grew up managing a few revenue-generating sites).
+
+Minimum entry for the health pane (`H`) is:
+
+```toml
+[[businesses]]
+name = "my-blog"
+primary_domain = "blog.example.com"
+host = "personal"          # an ssh_alias from your [[hosts]] list
+```
+
+That's it — no Stripe key, no Mercury account, no Postmark token. With just those three lines the `H` pane gives you HTTPS reachability + days-until-cert-expiry for `blog.example.com`. Add `stripe_account_id` / `mercury_account_id` / `postmark_server_token` only if you also want the money or Postmark overlays.
+
 ## Operator-specific bits to know about
 
 A handful of integrations exist because the author wired them in for his own fleet. They degrade cleanly when their backing CLI / API key is missing — the rest of helm keeps working — but if you want them lit up:

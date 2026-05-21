@@ -67,8 +67,17 @@ hostname = "mac.lan"
 user = "you"
 notes = "macOS workstation"
 
-# Businesses: maps a brand/domain to the host(s) it runs on. Useful when one
-# host serves multiple sites and you want helm to remember the mapping.
+# Businesses — "business" here is just helm's noun for *any named thing
+# with a domain*. Personal site, side project, brochureware, OSS
+# landing page, your blog — anything you want the health pane (`H`) to
+# probe and the Browse detail panel to show. The naming is historical
+# (helm grew up managing a few revenue-generating sites); nothing in
+# the code requires a business to make money. Skip stripe/mercury/
+# postmark fields if it doesn't.
+#
+# Each entry maps a domain to the host(s) it runs on; helm uses this
+# to render per-business overlays and (when the health flag is on)
+# probe HTTPS reachability + TLS NotAfter for `primary_domain`.
 
 [[businesses]]
 name = "example.org"
