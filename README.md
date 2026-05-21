@@ -30,15 +30,17 @@ Hand the agent the skill at [`.claude/skills/helm-shell/SKILL.md`](.claude/skill
 ## Quickstart
 
 ```sh
-# macOS
+# macOS — tap-qualified to avoid the Kubernetes Helm collision
 brew tap crodorg/helm
-brew install helm
+brew install crodorg/helm/helm
 
 # Linux / OpenBSD
 git clone https://github.com/crodorg/helm
 cd helm && cargo build --release
 ln -s "$PWD/target/release/helm" ~/.local/bin/helm
 ```
+
+> **Note on the name.** `brew install helm` (unqualified) gets you the Kubernetes package manager — a completely different `helm`. Always tap-qualify: `brew install crodorg/helm/helm`. If you also use Kubernetes Helm, only one can own `/opt/homebrew/bin/helm`; pick whichever you reach for more, or `brew link --overwrite` to swap.
 
 Open a shared tmux session against any host (or your own machine via the reserved `local` alias):
 
