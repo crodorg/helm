@@ -296,9 +296,26 @@ You can also bring your own balance source: helm just expects a binary on `$PATH
 
 Either CLI is responsible for its own auth — helm passes nothing through. The printing-press CLIs honor `STRIPE_SECRET_KEY` and `MERCURY_BEARER_AUTH` env vars (see their READMEs); a one-off wrapper around `curl` + Stripe's REST API will work just as well.
 
-## Services pane / doas
+## Services pane / per-host OS family
 
-`rcctl ls started|failed` walks every rc.d service and calls `_rc_check` on each; for services whose pidfile is root-owned (postgres, openresolvd, etc.), `_rc_check` needs root. Helm therefore prefixes `doas -n` so the command fails fast with an explicit authorization error rather than hanging on a password prompt the pane can't answer. Add three lines to `/etc/doas.conf` on each target host:
+The Services pane (`s` from Browse) is the only inventory pane that diverges across operating systems. Pick the right init system per host in `config.toml`:
+
+```toml
+[[hosts]]
+name = "web"
+ssh_alias = "web"
+os = "openbsd"     # openbsd | debian | macos — defaults to openbsd
+```
+
+What each value runs:
+
+| `os`      | Init system | Command helm fires                                                    |
+|-----------|-------------|------------------------------------------------------------------------|
+| `openbsd` | `rcctl`     | three parallel `doas -n rcctl ls {on,started,failed}` calls (see below)|
+| `debian`  | `systemctl` | `systemctl list-units --type=service --all --no-legend --plain --no-pager` |
+| `macos`   | `launchctl` | `launchctl list` (user-domain services only)                          |
+
+Debian + macOS calls run unprivileged — no `sudo` / `doas` prefix — because listing is read-only. **OpenBSD's `rcctl` needs root**, however, because `rcctl ls started|failed` calls `_rc_check` per service and some pidfiles are root-owned (postgres, openresolvd, etc.). Add three lines to `/etc/doas.conf` on each OpenBSD host so the call doesn't hang on a password prompt the pane can't answer:
 
 ```
 permit nopass <user> cmd rcctl args ls on
@@ -307,6 +324,20 @@ permit nopass <user> cmd rcctl args ls failed
 ```
 
 Replace `<user>` with the ssh user from your `~/.ssh/config` Host block.
+
+The `os` field falls back to `openbsd` for backwards compatibility — helm grew up on an OpenBSD fleet. Linux and macOS hosts must set it explicitly or the Services pane will fire `rcctl` on them and get nothing.
+
+## Operator-specific bits to know about
+
+A handful of integrations exist because the author wired them in for his own fleet. They degrade cleanly when their backing CLI / API key is missing — the rest of helm keeps working — but if you want them lit up:
+
+- **Money pane (`m`)** — shells out to `stripe-pp-cli` + `mercury-pp-cli` from the open-source [printing-press-library](https://github.com/mvanhorn/printing-press-library). See the dedicated section above. Skip the pane (or just don't open it) if you don't care about per-business balances.
+- **Postmark stats** — per-business field `postmark_server_token` in `config.toml` fires a `curl` against Postmark's `/stats/outbound` on startup and renders Sent / Bounced / Spam under the business in Browse. Leave the field unset to skip.
+- **Vultr pane (`v`)** — needs `VULTR_API_KEY` in the environment. Without it the pane shows `(set $VULTR_API_KEY to enable)` and the Browse detail panel omits Vultr-derived lines. No Vultr account? Ignore the pane entirely.
+- **Log defaults** — the built-in `l` palette ships `m=/var/log/messages`, `d=/var/log/daemon`, `a=/var/log/authlog`. Those are OpenBSD paths. On Linux add your own `[[logs]]` entries (e.g. `path = "/var/log/syslog"`); on macOS log files live elsewhere again and `journalctl -f` / `log stream` are usually what you want — wrap them as a shortcut instead.
+- **Provider enum (`local | vultr | buyvm | unknown`)** — drives the colored tag in Browse and which API overlays fire. `buyvm` is a no-op badge now (their Stallion REST API was retired); use `unknown` for any provider helm doesn't know about — it just labels the row.
+
+None of these gate the agent-facing surface. The `helm shell` primitives + sessions pane + daemon + audit log all work on a host with zero overlays configured.
 
 ## Testing
 

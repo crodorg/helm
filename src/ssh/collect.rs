@@ -13,6 +13,11 @@ use std::process::Command;
 use std::sync::mpsc::{channel, Receiver};
 use std::thread;
 
+use crate::config::OsFamily;
+use crate::inventory::services::{
+    parse_launchctl, parse_rcctl, parse_systemctl, Service,
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Slot {
     On,
@@ -30,52 +35,94 @@ impl Slot {
     }
 }
 
+
+/// Final, OS-normalized result a Services pane consumes — one parsed
+/// `Vec<Service>` regardless of which init system produced it.
 #[derive(Debug)]
-pub struct CollectResult {
-    pub slot: Slot,
-    pub output: Result<String, String>,
+pub struct ServicesResult {
+    pub output: Result<Vec<Service>, String>,
 }
 
-/// Spawn three parallel `ssh <alias> rcctl ls {on,started,failed}` calls.
-/// Each thread sends a single `CollectResult` to the returned channel.
-pub fn spawn_rcctl_triple(alias: &str) -> Receiver<CollectResult> {
+/// OS-aware service inventory. Dispatches to:
+/// - OpenBSD (`rcctl`): three parallel `rcctl ls {on,started,failed}`
+///   calls wrapped in `doas -n`, merged via `parse_rcctl`.
+/// - Debian (`systemctl`): single `systemctl list-units --type=service
+///   --all --no-legend --plain --no-pager`. Runs unprivileged — no `sudo`
+///   prefix — since listing is read-only.
+/// - macOS (`launchctl`): single `launchctl list`. Runs in the user's
+///   launchd domain (no system services).
+///
+/// Sends exactly one `ServicesResult` on the returned channel.
+pub fn spawn_services(alias: &str, os: OsFamily) -> Receiver<ServicesResult> {
     let (tx, rx) = channel();
+    let alias = alias.to_string();
+    thread::spawn(move || {
+        let result = match os {
+            OsFamily::Openbsd => collect_rcctl(&alias),
+            OsFamily::Debian => collect_systemctl(&alias),
+            OsFamily::Macos => collect_launchctl(&alias),
+        };
+        let _ = tx.send(ServicesResult { output: result });
+    });
+    rx
+}
+
+fn collect_rcctl(alias: &str) -> Result<Vec<Service>, String> {
+    let mut on = String::new();
+    let mut started = String::new();
+    let mut failed = String::new();
     for slot in [Slot::On, Slot::Started, Slot::Failed] {
-        let alias = alias.to_string();
-        let tx = tx.clone();
-        thread::spawn(move || {
-            let sub = slot.subcommand();
-            // `rcctl ls started|failed` calls `_rc_check` per service, which
-            // needs root because some service pidfiles are root-owned. We
-            // run via `doas -n` (non-interactive) so an unconfigured doas
-            // surfaces a clean authorization error instead of hanging on a
-            // password prompt this pane has no modal for. The operator
-            // configures it once in /etc/doas.conf:
-            //     permit nopass <user> cmd rcctl args ls on
-            //     permit nopass <user> cmd rcctl args ls started
-            //     permit nopass <user> cmd rcctl args ls failed
-            let result = match Command::new("ssh")
-                .arg(&alias)
-                .arg(format!("doas -n rcctl ls {sub}"))
-                .output()
-            {
-                Ok(o) if o.status.success() => {
-                    Ok(String::from_utf8_lossy(&o.stdout).into_owned())
+        let sub = slot.subcommand();
+        match Command::new("ssh")
+            .arg(alias)
+            .arg(format!("doas -n rcctl ls {sub}"))
+            .output()
+        {
+            Ok(o) if o.status.success() => {
+                let s = String::from_utf8_lossy(&o.stdout).into_owned();
+                match slot {
+                    Slot::On => on = s,
+                    Slot::Started => started = s,
+                    Slot::Failed => failed = s,
                 }
-                Ok(o) => Err(format!(
+            }
+            Ok(o) => {
+                return Err(format!(
                     "doas -n rcctl ls {sub} exit {}: {}",
                     o.status.code().unwrap_or(-1),
                     String::from_utf8_lossy(&o.stderr).trim()
-                )),
-                Err(e) => Err(format!("spawn ssh failed: {e}")),
-            };
-            let _ = tx.send(CollectResult {
-                slot,
-                output: result,
-            });
-        });
+                ));
+            }
+            Err(e) => return Err(format!("spawn ssh failed: {e}")),
+        }
     }
-    rx
+    Ok(parse_rcctl(&on, &started, &failed))
+}
+
+fn collect_systemctl(alias: &str) -> Result<Vec<Service>, String> {
+    let cmd = "systemctl list-units --type=service --all --no-legend --plain --no-pager";
+    run_remote(alias, cmd).map(|s| parse_systemctl(&s))
+}
+
+fn collect_launchctl(alias: &str) -> Result<Vec<Service>, String> {
+    run_remote(alias, "launchctl list").map(|s| parse_launchctl(&s))
+}
+
+fn run_remote(alias: &str, cmd: &str) -> Result<String, String> {
+    let exec = if alias == crate::tmux::LOCAL_ALIAS {
+        Command::new("sh").arg("-c").arg(cmd).output()
+    } else {
+        Command::new("ssh").arg(alias).arg(cmd).output()
+    };
+    match exec {
+        Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).into_owned()),
+        Ok(o) => Err(format!(
+            "{cmd} exit {}: {}",
+            o.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&o.stderr).trim()
+        )),
+        Err(e) => Err(format!("spawn failed: {e}")),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

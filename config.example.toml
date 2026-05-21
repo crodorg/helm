@@ -18,6 +18,7 @@
 name = "router"
 ssh_alias = "router"          # entry in ~/.ssh/config
 provider = "local"            # local | vultr | buyvm | unknown
+os = "openbsd"                # openbsd | debian | macos — drives the Services pane
 hostname = "192.168.1.1"
 user = "admin"
 notes = "OpenBSD edge router"
@@ -26,9 +27,32 @@ notes = "OpenBSD edge router"
 name = "web"
 ssh_alias = "web"
 provider = "vultr"
+os = "openbsd"
 hostname = "web.example.org"
 user = "admin"
 notes = "OpenBSD application host"
+
+# A Debian/Ubuntu Linux VPS — the Services pane shells out to
+# `systemctl list-units --type=service --all` and parses unit state.
+[[hosts]]
+name = "linux-app"
+ssh_alias = "linux-app"
+provider = "vultr"
+os = "debian"
+hostname = "linux-app.example.org"
+user = "deploy"
+notes = "Debian application host"
+
+# A macOS host — the Services pane uses `launchctl list` (user-domain
+# services only). Useful for laptops you also drive through helm.
+[[hosts]]
+name = "mac"
+ssh_alias = "mac"
+provider = "local"
+os = "macos"
+hostname = "mac.lan"
+user = "you"
+notes = "macOS workstation"
 
 # Businesses: maps a brand/domain to the host(s) it runs on. Useful when one
 # host serves multiple sites and you want helm to remember the mapping.

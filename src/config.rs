@@ -96,6 +96,12 @@ pub struct Host {
     pub ssh_alias: String,
     #[serde(default)]
     pub provider: Provider,
+    /// OS family — drives which service manager (`rcctl`, `systemctl`,
+    /// `launchctl`) the Services pane shells out to. Defaults to OpenBSD
+    /// because helm grew up on an OpenBSD fleet; set explicitly in
+    /// `config.toml` for Linux / macOS hosts.
+    #[serde(default)]
+    pub os: OsFamily,
     #[serde(default)]
     pub hostname: Option<String>,
     #[serde(default)]
@@ -121,6 +127,25 @@ pub enum Provider {
     Buyvm,
     #[default]
     Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum OsFamily {
+    #[default]
+    Openbsd,
+    Debian,
+    Macos,
+}
+
+impl OsFamily {
+    pub fn label(self) -> &'static str {
+        match self {
+            OsFamily::Openbsd => "openbsd",
+            OsFamily::Debian => "debian",
+            OsFamily::Macos => "macos",
+        }
+    }
 }
 
 impl Provider {
@@ -276,6 +301,7 @@ impl Config {
                     name: sh.alias.clone(),
                     ssh_alias: sh.alias,
                     provider,
+                    os: OsFamily::default(),
                     hostname: sh.hostname,
                     user: sh.user,
                     notes: String::new(),

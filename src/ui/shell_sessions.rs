@@ -100,17 +100,10 @@ fn draw_body(f: &mut Frame, area: Rect, s: &ShellSessionsState) {
                 Color::Magenta
             };
             let alias_pad = format!("{:<16}", row.alias);
-            let label_suffix = if row.label.is_empty() {
-                String::new()
-            } else {
-                format!(":{}", row.label)
-            };
             ListItem::new(Line::from(vec![
                 Span::styled(alias_pad, Style::default().fg(alias_color)),
                 Span::raw(" "),
                 Span::styled(row.target.clone(), style),
-                Span::raw("    "),
-                Span::styled(label_suffix, Style::default().fg(Color::DarkGray)),
             ]))
         })
         .collect();

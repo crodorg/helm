@@ -36,13 +36,11 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_header(f: &mut Frame, area: Rect, s: &crate::app::ServicesState) {
-    let on_done = s.on.is_some();
-    let started_done = s.started.is_some();
-    let failed_done = s.failed.is_some();
-
     let summary = if let Some(svc) = s.services.as_ref() {
         let (up, down, fail, trans) = count_states(svc);
         Line::from(vec![
+            badge(&format!(" {} ", s.os.label()), Color::Cyan),
+            Span::raw("    "),
             badge(" UP ", Color::Green),
             Span::raw(format!(" {up}    ")),
             badge(" DOWN ", Color::DarkGray),
@@ -54,21 +52,27 @@ fn draw_header(f: &mut Frame, area: Rect, s: &crate::app::ServicesState) {
         ])
     } else if let Some(err) = s.error.as_ref() {
         Line::from(Span::styled(
-            format!("error: {err}"),
+            format!("error ({}): {err}", s.os.label()),
             Style::default().fg(Color::Red),
         ))
     } else {
         Line::from(vec![
-            Span::styled("loading… ", Style::default().fg(Color::DarkGray)),
-            tick("on", on_done),
-            Span::raw(" "),
-            tick("started", started_done),
-            Span::raw(" "),
-            tick("failed", failed_done),
+            Span::styled(
+                format!("loading via {}… ", init_system(s.os)),
+                Style::default().fg(Color::DarkGray),
+            ),
         ])
     };
 
     f.render_widget(Paragraph::new(summary), area);
+}
+
+fn init_system(os: crate::config::OsFamily) -> &'static str {
+    match os {
+        crate::config::OsFamily::Openbsd => "rcctl",
+        crate::config::OsFamily::Debian => "systemctl",
+        crate::config::OsFamily::Macos => "launchctl",
+    }
 }
 
 fn draw_body(f: &mut Frame, area: Rect, s: &crate::app::ServicesState) {
@@ -151,11 +155,3 @@ fn badge(text: &str, bg: Color) -> Span<'static> {
     )
 }
 
-fn tick(label: &str, done: bool) -> Span<'static> {
-    let (sym, color) = if done {
-        ("✓", Color::Green)
-    } else {
-        ("·", Color::DarkGray)
-    };
-    Span::styled(format!("{sym} {label}"), Style::default().fg(color))
-}

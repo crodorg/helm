@@ -8,11 +8,11 @@ use crate::history::{HistoryStore, LineKind, LineRecord, RunSource};
 use crate::inventory::health::{self, Health, HealthResult};
 use crate::inventory::ports::{self as ports_inv, ListeningSocket};
 use crate::inventory::processes::{self as procs_inv, Process};
-use crate::inventory::services::{parse_rcctl, Service};
+use crate::inventory::services::Service;
 use crate::money::{self, MoneyCache, MoneyResult, MoneySlot};
 use crate::vultr::{self, ActionKind, ActionResult, VultrCache, VultrResult, VultrSlot};
 use crate::ssh::collect::{
-    spawn_processes_and_ports, spawn_rcctl_triple, CollectResult, InvResult, InvSlot, Slot,
+    spawn_processes_and_ports, InvResult, InvSlot,
 };
 use crate::ssh::{RunEvent, RunHandle};
 use crate::tmux::shell_quote;
@@ -520,8 +520,6 @@ pub struct ShellSessionRow {
     /// User-facing target, e.g. `vps1`, `vps1:deploy`, `local`, `local:agent`.
     pub target: String,
     pub alias: String,
-    /// Empty for the default `helm` session; otherwise the label after `:`.
-    pub label: String,
 }
 
 pub struct ShellSessionsState {
@@ -558,14 +556,9 @@ impl ShellSessionsState {
             };
             for t in targets {
                 let (a, _session) = crate::tmux::parse_target(t);
-                let label = t
-                    .split_once(':')
-                    .map(|(_, l)| l.to_string())
-                    .unwrap_or_default();
                 rows.push(ShellSessionRow {
                     target: t.clone(),
                     alias: a,
-                    label,
                 });
             }
         }
@@ -579,48 +572,22 @@ impl ShellSessionsState {
 pub struct ServicesState {
     pub host_alias: String,
     pub host_name: String,
-    pub rx: Receiver<CollectResult>,
-    pub on: Option<Result<String, String>>,
-    pub started: Option<Result<String, String>>,
-    pub failed: Option<Result<String, String>>,
+    pub os: crate::config::OsFamily,
+    pub rx: Receiver<crate::ssh::collect::ServicesResult>,
     pub services: Option<Vec<Service>>,
     pub error: Option<String>,
     pub scroll: ScrollState,
 }
 
 impl ServicesState {
-    fn slot_mut(&mut self, s: Slot) -> &mut Option<Result<String, String>> {
-        match s {
-            Slot::On => &mut self.on,
-            Slot::Started => &mut self.started,
-            Slot::Failed => &mut self.failed,
-        }
-    }
-
-    fn all_slots_filled(&self) -> bool {
-        self.on.is_some() && self.started.is_some() && self.failed.is_some()
-    }
-
-    fn try_compute(&mut self) {
-        if !self.all_slots_filled() || self.services.is_some() || self.error.is_some() {
+    fn ingest(&mut self, result: crate::ssh::collect::ServicesResult) {
+        if self.services.is_some() || self.error.is_some() {
             return;
         }
-        let (on, started, failed) = (
-            self.on.as_ref().unwrap(),
-            self.started.as_ref().unwrap(),
-            self.failed.as_ref().unwrap(),
-        );
-        for r in [on, started, failed] {
-            if let Err(e) = r {
-                self.error = Some(e.clone());
-                return;
-            }
+        match result.output {
+            Ok(svc) => self.services = Some(svc),
+            Err(e) => self.error = Some(e),
         }
-        self.services = Some(parse_rcctl(
-            on.as_ref().unwrap(),
-            started.as_ref().unwrap(),
-            failed.as_ref().unwrap(),
-        ));
     }
 }
 
@@ -850,15 +817,14 @@ impl App {
         };
         let alias = host.ssh_alias.clone();
         let name = host.name.clone();
-        let rx = spawn_rcctl_triple(&alias);
+        let os = host.os;
+        let rx = crate::ssh::collect::spawn_services(&alias, os);
         self.mode = Mode::Services;
         self.services = Some(ServicesState {
             host_alias: alias,
             host_name: name,
+            os,
             rx,
-            on: None,
-            started: None,
-            failed: None,
             services: None,
             error: None,
             scroll: ScrollState::new_top(),
@@ -871,14 +837,13 @@ impl App {
         };
         let alias = s.host_alias.clone();
         let name = s.host_name.clone();
-        let rx = spawn_rcctl_triple(&alias);
+        let os = s.os;
+        let rx = crate::ssh::collect::spawn_services(&alias, os);
         self.services = Some(ServicesState {
             host_alias: alias,
             host_name: name,
+            os,
             rx,
-            on: None,
-            started: None,
-            failed: None,
             services: None,
             error: None,
             scroll: ScrollState::new_top(),
@@ -1907,9 +1872,8 @@ impl App {
             return;
         };
         while let Ok(res) = s.rx.try_recv() {
-            *s.slot_mut(res.slot) = Some(res.output);
+            s.ingest(res);
         }
-        s.try_compute();
     }
 
     pub fn quit(&mut self) {
