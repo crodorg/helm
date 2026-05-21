@@ -178,6 +178,11 @@ impl Host {
 pub enum Provider {
     Local,
     Vultr,
+    /// BuyVM Stallion (Frantech). Helm has no API integration here —
+    /// Stallion's REST API was retired — but the badge is useful for
+    /// operators who run mixed fleets and want to see provenance at a
+    /// glance.
+    Buyvm,
     #[default]
     Unknown,
 }
@@ -208,6 +213,7 @@ impl Provider {
         match self {
             Provider::Local => "LOCAL",
             Provider::Vultr => "VULTR",
+            Provider::Buyvm => "BUYVM",
             Provider::Unknown => "  ?  ",
         }
     }

@@ -28,7 +28,7 @@ money  = false      # `m` — Stripe + Mercury balances via printing-press CLIs
 [[hosts]]
 name = "router"
 ssh_alias = "router"          # entry in ~/.ssh/config
-provider = "local"            # local | vultr | unknown
+provider = "local"            # local | vultr | buyvm | unknown — labels only; no API integration for buyvm
 os = "openbsd"                # openbsd | debian | macos — drives the Services pane
 hostname = "192.168.1.1"
 user = "admin"

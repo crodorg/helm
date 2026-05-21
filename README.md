@@ -353,7 +353,7 @@ A handful of integrations exist because the author wired them in for his own fle
 - **Postmark stats** — per-business field `postmark_server_token` in `config.toml` fires a `curl` against Postmark's `/stats/outbound` on startup and renders Sent / Bounced / Spam under the business in Browse. Leave the field unset to skip.
 - **Vultr pane (`v`)** — needs `VULTR_API_KEY` in the environment. Without it the pane shows `(set $VULTR_API_KEY to enable)` and the Browse detail panel omits Vultr-derived lines. No Vultr account? Ignore the pane entirely.
 - **Log defaults** — the built-in `l` palette varies by the selected host's `os` field. OpenBSD: `m=/var/log/messages`, `d=/var/log/daemon`, `a=/var/log/authlog`. Debian: `s=/var/log/syslog`, `a=/var/log/auth.log`, `k=/var/log/kern.log`. macOS: `s=/var/log/system.log`, `i=/var/log/install.log`, `w=/var/log/wifi.log`. Add `[[logs]]` entries in `config.toml` for app-specific files.
-- **Provider enum (`local | vultr | unknown`)** — drives the colored tag in Browse and which API overlays fire. Use `unknown` for any provider helm doesn't know about — it just labels the row.
+- **Provider enum (`local | vultr | buyvm | unknown`)** — drives the colored tag in Browse and (for `vultr`) which API overlay fires. `buyvm` is a label-only tag (Stallion's REST API was retired, so no overlay); use `unknown` for any provider helm doesn't recognize — it just labels the row.
 
 None of these gate the agent-facing surface. The `helm shell` primitives + sessions pane + daemon + audit log all work on a host with zero overlays configured.
 
