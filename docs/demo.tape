@@ -18,7 +18,7 @@
 Output docs/demo.gif
 
 Set Shell bash
-Set FontFamily "Monaspace Neon"
+Set FontFamily "DejaVu Sans Mono"
 Set FontSize 16
 Set Width  1400
 Set Height 800

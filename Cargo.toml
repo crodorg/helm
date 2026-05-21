@@ -2,7 +2,7 @@
 name = "helm"
 version = "0.1.0"
 edition = "2021"
-description = "TUI fleet manager for OpenBSD VPSs and the businesses inside them"
+description = "Shared-shell etiquette for AI agents + a TUI for the fleet they live on"
 license = "MIT"
 
 [[bin]]
