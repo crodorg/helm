@@ -260,6 +260,21 @@ pub struct SshConfigSection {
     pub path: Option<PathBuf>,
     #[serde(default)]
     pub ignore: Vec<String>,
+    /// Per-alias OS overrides for hosts discovered in ~/.ssh/config. Without
+    /// this, synthesized hosts default to `openbsd`, which means the Services
+    /// pane runs `rcctl ls` against a mac/linux box and fails. Add an entry
+    /// per non-OpenBSD host to route the dispatcher correctly:
+    ///
+    /// ```toml
+    /// [ssh_config.os]
+    /// mac = "macos"
+    /// linux-vps = "linux"
+    /// ```
+    ///
+    /// Only consulted when synthesizing a host; explicit `[[hosts]]` entries
+    /// keep their own `os` field.
+    #[serde(default)]
+    pub os: std::collections::HashMap<String, OsFamily>,
 }
 
 impl Default for SshConfigSection {
@@ -268,6 +283,7 @@ impl Default for SshConfigSection {
             enabled: true,
             path: None,
             ignore: Vec::new(),
+            os: std::collections::HashMap::new(),
         }
     }
 }
@@ -357,11 +373,17 @@ impl Config {
                 }
             } else {
                 let provider = infer_provider(sh.hostname.as_deref());
+                let os = self
+                    .ssh_config
+                    .os
+                    .get(&sh.alias)
+                    .copied()
+                    .unwrap_or_default();
                 self.hosts.push(Host {
                     name: sh.alias.clone(),
                     ssh_alias: sh.alias,
                     provider,
-                    os: OsFamily::default(),
+                    os,
                     hostname: sh.hostname,
                     user: sh.user,
                     notes: String::new(),
@@ -513,5 +535,71 @@ mod tests {
         ]);
         let aliases: Vec<&str> = cfg.hosts.iter().map(|h| h.ssh_alias.as_str()).collect();
         assert_eq!(aliases, vec!["router"]);
+    }
+
+    #[test]
+    fn merge_applies_os_override_to_synthesized_hosts() {
+        let mut cfg: Config = toml::from_str(
+            r#"
+            [ssh_config.os]
+            mac = "macos"
+            linux-vps = "linux"
+            "#,
+        )
+        .unwrap();
+        cfg.merge_ssh_hosts(vec![
+            SshHost {
+                alias: "mac".into(),
+                hostname: Some("mac.lan".into()),
+                user: Some("you".into()),
+                port: None,
+                identity_file: None,
+            },
+            SshHost {
+                alias: "linux-vps".into(),
+                hostname: Some("203.0.113.20".into()),
+                user: Some("deploy".into()),
+                port: None,
+                identity_file: None,
+            },
+            SshHost {
+                alias: "obsd".into(),
+                hostname: Some("203.0.113.30".into()),
+                user: Some("admin".into()),
+                port: None,
+                identity_file: None,
+            },
+        ]);
+        let mac = cfg.hosts.iter().find(|h| h.name == "mac").unwrap();
+        assert_eq!(mac.os, OsFamily::Macos);
+        let lin = cfg.hosts.iter().find(|h| h.name == "linux-vps").unwrap();
+        assert_eq!(lin.os, OsFamily::Linux);
+        let obsd = cfg.hosts.iter().find(|h| h.name == "obsd").unwrap();
+        assert_eq!(obsd.os, OsFamily::Openbsd, "unmapped alias keeps default");
+    }
+
+    #[test]
+    fn os_override_does_not_clobber_explicit_toml_host() {
+        let mut cfg: Config = toml::from_str(
+            r#"
+            [[hosts]]
+            name = "mac"
+            ssh_alias = "mac"
+            os = "openbsd"
+
+            [ssh_config.os]
+            mac = "macos"
+            "#,
+        )
+        .unwrap();
+        cfg.merge_ssh_hosts(vec![SshHost {
+            alias: "mac".into(),
+            hostname: Some("mac.lan".into()),
+            user: None,
+            port: None,
+            identity_file: None,
+        }]);
+        let mac = cfg.hosts.iter().find(|h| h.name == "mac").unwrap();
+        assert_eq!(mac.os, OsFamily::Openbsd, "explicit [[hosts]].os wins");
     }
 }

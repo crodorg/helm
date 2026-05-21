@@ -176,6 +176,16 @@ Helm shells out to the system `ssh` binary for everything. That means:
 
 Helm also reads `~/.ssh/config` directly at startup. Every named Host block (wildcards and IP-literal aliases skipped) becomes a candidate host. A matching TOML entry — same `ssh_alias` — wins on `name`/`provider`/`notes`; ssh config backfills `hostname`/`user` when the TOML entry omits them. Ssh-only aliases show up with provider `?` (or `LOCAL` for RFC1918 / loopback). Suppress noisy aliases via `[ssh_config] ignore = ["..."]`. Disable the whole feature with `[ssh_config] enabled = false`.
 
+Synthesized hosts default to `os = "openbsd"`. If an ssh-config-discovered alias is a mac or systemd Linux box, tag it so the Services pane (`s`) dispatches to the right init system instead of running `rcctl ls`:
+
+```toml
+[ssh_config.os]
+mac = "macos"
+linux-vps = "linux"
+```
+
+An explicit `[[hosts]].os` always wins over the override map.
+
 ### Agent check
 
 At startup, helm runs `ssh-add -l`, computes the fingerprint of each `IdentityFile` referenced by your hosts (via the matching `.pub` file and `ssh-keygen -lf`), and **refuses to open the TUI** if any expected key isn't loaded or if ssh-agent isn't reachable. The exact `ssh-add` command(s) to run are printed to stderr, so you can copy-paste, load the key, then re-run helm. Typical workflow with a passphrased VPS key shared across hosts:

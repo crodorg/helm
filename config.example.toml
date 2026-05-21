@@ -29,7 +29,7 @@ money  = false      # `m` — Stripe + Mercury balances via printing-press CLIs
 name = "router"
 ssh_alias = "router"          # entry in ~/.ssh/config
 provider = "local"            # local | vultr | buyvm | unknown — labels only; no API integration for buyvm
-os = "openbsd"                # openbsd | debian | macos — drives the Services pane
+os = "openbsd"                # openbsd | linux | macos — drives the Services pane
 hostname = "192.168.1.1"
 user = "admin"
 notes = "OpenBSD edge router"
@@ -115,6 +115,15 @@ notes = "Marketing site"
 enabled = true
 # path = "/custom/path/to/ssh_config"
 ignore = ["router-git"]
+
+# Per-alias OS overrides for hosts discovered in ~/.ssh/config. Without
+# these, synthesized hosts default to `openbsd` and the Services pane (`s`)
+# would call `rcctl ls` against a mac/linux box and fail. Map non-OpenBSD
+# aliases to their actual init system. Explicit `[[hosts]].os` always wins
+# over this map.
+[ssh_config.os]
+mac = "macos"
+linux-vps = "linux"
 
 # Shortcuts — quick-fire remote commands. Press `a` from Browse to open the
 # palette filtered to the selected host, then the shortcut's single-char key.
