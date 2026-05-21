@@ -70,7 +70,7 @@ fn draw_header(f: &mut Frame, area: Rect, s: &crate::app::ServicesState) {
 fn init_system(os: crate::config::OsFamily) -> &'static str {
     match os {
         crate::config::OsFamily::Openbsd => "rcctl",
-        crate::config::OsFamily::Debian => "systemctl",
+        crate::config::OsFamily::Linux => "systemctl",
         crate::config::OsFamily::Macos => "launchctl",
     }
 }

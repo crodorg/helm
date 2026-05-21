@@ -59,7 +59,7 @@ pub fn spawn_services(alias: &str, os: OsFamily) -> Receiver<ServicesResult> {
     thread::spawn(move || {
         let result = match os {
             OsFamily::Openbsd => collect_rcctl(&alias),
-            OsFamily::Debian => collect_systemctl(&alias),
+            OsFamily::Linux => collect_systemctl(&alias),
             OsFamily::Macos => collect_launchctl(&alias),
         };
         let _ = tx.send(ServicesResult { output: result });

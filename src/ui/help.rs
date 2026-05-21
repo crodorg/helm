@@ -11,7 +11,14 @@ use crate::help::{bindings_for, mode_title};
 
 pub fn draw(f: &mut Frame, area: Rect, app: &App) {
     let origin = app.help_origin.unwrap_or(Mode::Browse);
-    let bindings = bindings_for(origin, app.runner.focus);
+    let raw = bindings_for(origin, app.runner.focus);
+    let bindings: Vec<crate::help::Binding> = raw
+        .iter()
+        .filter(|b| {
+            origin != Mode::Browse || app.config.features.browse_key_enabled(b.key)
+        })
+        .copied()
+        .collect();
     let title = mode_title(origin);
 
     // Height: 4 chrome rows (borders + header line + spacer + footer line) +
@@ -35,7 +42,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
         Line::from(""),
     ];
 
-    for b in bindings {
+    for b in &bindings {
         lines.push(Line::from(vec![
             Span::raw(" "),
             Span::styled(

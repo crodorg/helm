@@ -17,7 +17,15 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
     // Left column splits vertically: hosts on top, key palette below.
     // Palette height: one row per binding + 2 borders, capped so the
     // host list always has at least 5 visible rows even on small terms.
-    let bindings = crate::help::bindings_for(app.mode, app.runner.focus);
+    let raw = crate::help::bindings_for(app.mode, app.runner.focus);
+    let bindings: Vec<crate::help::Binding> = raw
+        .iter()
+        .filter(|b| {
+            app.mode != crate::app::Mode::Browse
+                || app.config.features.browse_key_enabled(b.key)
+        })
+        .copied()
+        .collect();
     let palette_h = (bindings.len() as u16 + 2)
         .min(cols[0].height.saturating_sub(5))
         .max(3);
@@ -28,7 +36,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
         .split(cols[0]);
 
     draw_hosts(f, left[0], app);
-    draw_keys_palette(f, left[1], bindings);
+    draw_keys_palette(f, left[1], &bindings);
     draw_detail(f, cols[1], app);
 }
 

@@ -16,12 +16,57 @@ pub struct Config {
     pub shortcuts: Vec<Shortcut>,
     #[serde(default)]
     pub logs: Vec<Log>,
+    #[serde(default)]
+    pub features: Features,
     /// When true (default), `helm` spawns a `helm daemon` after the TUI
     /// exits so external `helm exec` calls still work. Set to false to
     /// keep the operator's machine free of background daemons (e.g.
     /// when running `helm` on a laptop only ad-hoc).
     #[serde(default)]
     pub auto_daemon: Option<bool>,
+}
+
+/// Optional Browse-pane toggles. Helm ships several side panes that are
+/// only useful with specific external dependencies (Vultr API key, custom
+/// DNS resolver setup, the printing-press money CLIs). They default to
+/// off so a fresh install shows only the panes everyone needs; flip the
+/// relevant flag in `config.toml` to surface them.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Features {
+    #[serde(default)]
+    pub health: bool,
+    #[serde(default)]
+    pub vultr: bool,
+    #[serde(default)]
+    pub dns: bool,
+    #[serde(default)]
+    pub money: bool,
+}
+
+impl Default for Features {
+    fn default() -> Self {
+        Self {
+            health: false,
+            vultr: false,
+            dns: false,
+            money: false,
+        }
+    }
+}
+
+impl Features {
+    /// Returns true when the binding key should be visible in the Browse
+    /// keys panel + the help overlay. Bindings the operator hasn't opted
+    /// into stay hidden; the dispatch handler also treats them as no-ops.
+    pub fn browse_key_enabled(&self, key: &str) -> bool {
+        match key {
+            "H" => self.health,
+            "v" => self.vultr,
+            "d" => self.dns,
+            "m" => self.money,
+            _ => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -56,7 +101,7 @@ pub fn builtin_logs(os: OsFamily) -> Vec<Log> {
             log_entry('d', "daemon", "/var/log/daemon"),
             log_entry('a', "authlog", "/var/log/authlog"),
         ],
-        OsFamily::Debian => vec![
+        OsFamily::Linux => vec![
             log_entry('s', "syslog", "/var/log/syslog"),
             log_entry('a', "auth", "/var/log/auth.log"),
             log_entry('k', "kern", "/var/log/kern.log"),
@@ -142,7 +187,9 @@ pub enum Provider {
 pub enum OsFamily {
     #[default]
     Openbsd,
-    Debian,
+    /// Any systemd-based Linux — Debian, Ubuntu, RHEL, Arch, Devuan with
+    /// systemd, etc. The Services pane shells out to `systemctl`.
+    Linux,
     Macos,
 }
 
@@ -150,7 +197,7 @@ impl OsFamily {
     pub fn label(self) -> &'static str {
         match self {
             OsFamily::Openbsd => "openbsd",
-            OsFamily::Debian => "debian",
+            OsFamily::Linux => "linux",
             OsFamily::Macos => "macos",
         }
     }

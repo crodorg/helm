@@ -312,8 +312,10 @@ What each value runs:
 | `os`      | Init system | Command helm fires                                                    |
 |-----------|-------------|------------------------------------------------------------------------|
 | `openbsd` | `rcctl`     | three parallel `doas -n rcctl ls {on,started,failed}` calls (see below)|
-| `debian`  | `systemctl` | `systemctl list-units --type=service --all --no-legend --plain --no-pager` |
+| `linux`   | `systemctl` | `systemctl list-units --type=service --all --no-legend --plain --no-pager` |
 | `macos`   | `launchctl` | `launchctl list` (user-domain services only)                          |
+
+`linux` covers **any systemd-based distro** — Debian, Ubuntu, RHEL, Arch, Fedora, openSUSE, Devuan-with-systemd, etc. The driver is systemd, not the distro. Non-systemd Linux (Void / runit, Alpine / OpenRC, Gentoo / s6) isn't recognized yet — open an issue if you need it.
 
 Debian + macOS calls run unprivileged — no `sudo` / `doas` prefix — because listing is read-only. **OpenBSD's `rcctl` needs root**, however, because `rcctl ls started|failed` calls `_rc_check` per service and some pidfiles are root-owned (postgres, openresolvd, etc.). Add three lines to `/etc/doas.conf` on each OpenBSD host so the call doesn't hang on a password prompt the pane can't answer:
 
@@ -326,6 +328,22 @@ permit nopass <user> cmd rcctl args ls failed
 Replace `<user>` with the ssh user from your `~/.ssh/config` Host block.
 
 The `os` field falls back to `openbsd` for backwards compatibility — helm grew up on an OpenBSD fleet. Linux and macOS hosts must set it explicitly or the Services pane will fire `rcctl` on them and get nothing.
+
+## Optional panes (`[features]`)
+
+The Browse pane ships several side panes that are only useful when their backing dependency exists. **All default to off** so a fresh install shows only the panes everyone uses. Opt in by flipping the relevant flag in `config.toml`:
+
+```toml
+[features]
+health = false   # H — uptime / load / disk / mem per host
+vultr  = false   # v — Vultr instance overlay (needs $VULTR_API_KEY)
+dns    = false   # d — per-business A / AAAA / MX / CAA table
+money  = false   # m — Stripe + Mercury balances (needs pp CLIs)
+```
+
+Disabled panes are hidden from the Browse keys palette **and** the help overlay, so the UI looks like those panes don't exist until you turn them on. The dispatch handler treats the key as a no-op too — pressing `m` with `money = false` does nothing.
+
+Always-on panes (services `s`, sessions `S`, processes `p`, logs `l`, history `t`, shortcuts `a`, agent activity `c`, runner `r`) need no flag — they work against any host with ssh + tmux + (for services) the right init system.
 
 ## Operator-specific bits to know about
 

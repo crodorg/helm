@@ -10,11 +10,11 @@
 │               │ [s]      services                            │               │
 │               │ [S]      shell sessions                      │               │
 │               │ [p]      processes                           │               │
-│               │ [H]      health                              │               │
-└───────────────│ [v]      vultr                               │               │
-┌ keys (?) ─────│ [m]      money                               │               │
-│ [?]    close  │ [l]      logs                                │               │
-│ [esc]  close  │ [t]      history                             │               │
-│ [q]    close  │ [d]      dns                                 │               │
+│               │ [l]      logs                                │               │
+└───────────────│ [t]      history                             │               │
+┌ keys (?) ─────│ [a]      shortcuts                           │               │
+│ [?]    close  │ [c]      agent tail                          │               │
+│ [esc]  close  │ [?]      help                                │               │
+│ [q]    close  │ [q]      quit                                │               │
 └───────────────└──────────────────────────────────────────────┘───────────────┘
  press [?] for keys

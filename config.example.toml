@@ -5,6 +5,17 @@
 # to keep your machine free of background daemons.
 # auto_daemon = true
 #
+# Optional side panes — all default to OFF. Flip a flag on only when you
+# wire up its backing dependency (VULTR_API_KEY, the printing-press money
+# CLIs, a working DNS resolver chain, etc.). Disabled panes don't show up
+# in the Browse keys palette or the help overlay.
+[features]
+health = false      # `H` — uptime / load / disk / mem per host
+vultr  = false      # `v` — Vultr instance overlay (needs $VULTR_API_KEY)
+dns    = false      # `d` — per-business A/AAAA/MX/CAA table
+money  = false      # `m` — Stripe + Mercury balances via printing-press CLIs
+
+#
 # Hosts: each VPS or local server you want to manage.
 # `ssh_alias` must resolve via your ~/.ssh/config so ssh-agent + ProxyJump work
 # without helm caring about the details.
@@ -32,16 +43,18 @@ hostname = "web.example.org"
 user = "admin"
 notes = "OpenBSD application host"
 
-# A Debian/Ubuntu Linux VPS — the Services pane shells out to
-# `systemctl list-units --type=service --all` and parses unit state.
+# A systemd-based Linux VPS (Debian, Ubuntu, RHEL, Arch, etc.). The
+# Services pane shells out to `systemctl list-units --type=service --all`
+# and parses unit state. `os = "linux"` covers any systemd distro;
+# non-systemd Linux (runit / OpenRC / s6) isn't recognized yet.
 [[hosts]]
 name = "linux-app"
 ssh_alias = "linux-app"
 provider = "vultr"
-os = "debian"
+os = "linux"
 hostname = "linux-app.example.org"
 user = "deploy"
-notes = "Debian application host"
+notes = "Linux (systemd) application host"
 
 # A macOS host — the Services pane uses `launchctl list` (user-domain
 # services only). Useful for laptops you also drive through helm.
