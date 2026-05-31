@@ -1,7 +1,7 @@
 # helm
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Rust 2021](https://img.shields.io/badge/edition-2021-dea584.svg)](https://doc.rust-lang.org/edition-guide/rust-2021/)
+[![Rust 2024](https://img.shields.io/badge/edition-2024-dea584.svg)](https://doc.rust-lang.org/edition-guide/rust-2024/)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20OpenBSD-lightgrey.svg)](#)
 [![Status](https://img.shields.io/badge/status-v0.1-orange.svg)](#)
 
