@@ -173,7 +173,10 @@ impl Engine {
             exit: None,
             from_history: false,
         };
-        match spawn_remote(&alias, &cmd) {
+        // Bind the scrutinee so its temporaries (RunHandle fds, response_tx
+        // Sender) drop at end of block, identical across editions 2021/2024.
+        let spawned = spawn_remote(&alias, &cmd);
+        match spawned {
             Ok(handle) => {
                 self.agent_history.push(entry);
                 self.agent_active = Some(AgentExec {
