@@ -29,12 +29,50 @@
 
 use anyhow::{anyhow, Context, Result};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 
 /// Default scrollback lines for `capture`.
 pub const DEFAULT_CAPTURE_LINES: u32 = 1000;
 
 /// Reserved alias meaning "run tmux on the operator's machine, not via ssh".
 pub const LOCAL_ALIAS: &str = "local";
+
+/// Process-global flags inserted after `tmux` on every invocation helm makes
+/// (e.g. `-u` to force UTF-8). Set once at startup from config via
+/// [`set_flags`]; unset means plain `tmux`. A global keeps the tmux helpers'
+/// signatures unchanged — config is loaded once per process, so a single
+/// set is enough for the CLI, the TUI, and the daemon alike.
+static TMUX_FLAGS: OnceLock<Vec<String>> = OnceLock::new();
+
+/// Install the global tmux flags. First call wins (OnceLock); later calls are
+/// no-ops, which is fine since each helm process loads config exactly once.
+pub fn set_flags(flags: Vec<String>) {
+    let _ = TMUX_FLAGS.set(flags);
+}
+
+/// The configured flags, or an empty slice if [`set_flags`] was never called.
+/// Used by the local attach path, which builds a `Command` and pushes args
+/// directly rather than embedding a shell script.
+pub fn flags() -> Vec<String> {
+    TMUX_FLAGS.get().cloned().unwrap_or_default()
+}
+
+/// The `tmux` command word plus configured global flags, shell-quoted and
+/// space-joined for embedding in a remote script — e.g. `tmux -u`. Split out
+/// as a pure helper for testing the global-free path.
+fn build_tmux_prefix(flags: &[String]) -> String {
+    let mut s = String::from("tmux");
+    for f in flags {
+        s.push(' ');
+        s.push_str(&shell_quote(f));
+    }
+    s
+}
+
+/// `tmux` with the process-global flags applied (see [`set_flags`]).
+pub fn tmux_prefix() -> String {
+    build_tmux_prefix(TMUX_FLAGS.get().map(Vec::as_slice).unwrap_or(&[]))
+}
 
 /// Parse `alias[:label]` into `(alias, remote_session_name)`.
 pub fn parse_target(target: &str) -> (String, String) {
@@ -114,8 +152,9 @@ pub fn ensure_session(target: &str) -> Result<()> {
     // pane size; the operator's later attach resizes to their real
     // terminal automatically.
     let q = shell_quote(&session);
+    let tmux = tmux_prefix();
     let remote = format!(
-        "tmux has-session -t {q} 2>/dev/null || tmux new-session -d -x 200 -y 50 -s {q}"
+        "{tmux} has-session -t {q} 2>/dev/null || {tmux} new-session -d -x 200 -y 50 -s {q}"
     );
     let status = runner_cmd(&alias, &remote)
         .stdout(Stdio::null())
@@ -140,8 +179,9 @@ pub fn send_keys(target: &str, text: &str) -> Result<()> {
     let (alias, session) = parse_target(target);
     let q_session = shell_quote(&session);
     let q_text = shell_quote(text);
+    let tmux = tmux_prefix();
     let remote = format!(
-        "tmux send-keys -t {q_session} -l {q_text} && tmux send-keys -t {q_session} Enter"
+        "{tmux} send-keys -t {q_session} -l {q_text} && {tmux} send-keys -t {q_session} Enter"
     );
     let status = runner_cmd(&alias, &remote)
         .stdout(Stdio::null())
@@ -163,7 +203,7 @@ pub fn capture(target: &str, lines: u32) -> Result<String> {
     let q_session = shell_quote(&session);
     let neg = format!("-{lines}");
     let q_neg = shell_quote(&neg);
-    let remote = format!("tmux capture-pane -t {q_session} -p -S {q_neg}");
+    let remote = format!("{} capture-pane -t {q_session} -p -S {q_neg}", tmux_prefix());
     let out = runner_cmd(&alias, &remote)
         .output()
         .context("spawn tmux capture-pane runner")?;
@@ -181,8 +221,11 @@ pub fn capture(target: &str, lines: u32) -> Result<String> {
 /// user-facing target form for each (e.g. `vps1`, `vps1:deploy`, `local`,
 /// `local:agent`).
 pub fn list(alias: &str) -> Result<Vec<String>> {
-    let remote = "tmux list-sessions -F '#{session_name}' 2>/dev/null || true";
-    let out = runner_cmd(alias, remote)
+    let remote = format!(
+        "{} list-sessions -F '#{{session_name}}' 2>/dev/null || true",
+        tmux_prefix()
+    );
+    let out = runner_cmd(alias, &remote)
         .output()
         .context("spawn tmux list-sessions runner")?;
     if !out.status.success() {
@@ -207,7 +250,7 @@ pub fn list(alias: &str) -> Result<Vec<String>> {
 /// Kill the session for `target`.
 pub fn kill(target: &str) -> Result<()> {
     let (alias, session) = parse_target(target);
-    let remote = format!("tmux kill-session -t {}", shell_quote(&session));
+    let remote = format!("{} kill-session -t {}", tmux_prefix(), shell_quote(&session));
     let status = runner_cmd(&alias, &remote)
         .stdout(Stdio::null())
         .stderr(Stdio::inherit())
@@ -309,6 +352,26 @@ mod tests {
         assert_eq!(args[0], "vps1");
         assert!(args[1].contains("tmux has-session -t helm"));
         assert!(args[1].contains("/opt/homebrew/bin"));
+    }
+
+    #[test]
+    fn build_tmux_prefix_empty_is_bare_tmux() {
+        assert_eq!(build_tmux_prefix(&[]), "tmux");
+    }
+
+    #[test]
+    fn build_tmux_prefix_appends_flags_shell_quoted() {
+        assert_eq!(build_tmux_prefix(&["-u".into()]), "tmux -u");
+        assert_eq!(
+            build_tmux_prefix(&["-u".into(), "-2".into()]),
+            "tmux -u -2"
+        );
+        // A flag with a space/metachar gets quoted so it survives the
+        // remote shell intact.
+        assert_eq!(
+            build_tmux_prefix(&["-L".into(), "my socket".into()]),
+            "tmux -L 'my socket'"
+        );
     }
 
     #[test]

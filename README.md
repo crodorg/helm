@@ -54,6 +54,8 @@ helm shell send mac 'uptime'     # type a line + press Enter
 
 That's the full agent surface. `<target>` is `<alias>` or `<alias>:<label>`. The reserved alias `local` short-circuits ssh and uses the operator's own tmux server.
 
+For interactive use, `helm <target>` is shorthand for `helm shell open <target>` — `helm router`, `helm web:deploy`, or any IP / `~/.ssh/config` host attaches a persistent shell in one word.
+
 ## The four primitives
 
 | Command | What it does |
@@ -184,6 +186,8 @@ Hosts come from `[[hosts]]` entries *and* `~/.ssh/config` Host blocks (wildcards
 mac = "macos"
 linux-vps = "linux"
 ```
+
+Every tmux invocation helm makes (remote and local) carries the flags from `tmux_flags`, which defaults to `["-u"]` — forces UTF-8 so unicode renders even when the remote locale doesn't advertise it. Set `tmux_flags = []` to disable, or list your own (`["-u", "-2"]`). This also applies to `helm shell`, which otherwise reads no config.
 
 ## SSH
 

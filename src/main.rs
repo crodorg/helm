@@ -50,9 +50,14 @@ fn main() -> std::process::ExitCode {
                 return std::process::ExitCode::SUCCESS;
             }
             other if !other.starts_with('-') => {
-                eprintln!("helm: unknown subcommand `{other}`");
-                print_help();
-                return std::process::ExitCode::from(2);
+                // Bare `helm <target>` is sugar for `helm shell open <target>`:
+                // attach a persistent shell to any ssh alias / host / IP. The
+                // whole tail (argv[1..]) is forwarded so `<alias>:<label>`
+                // works; an unknown host surfaces ssh's own error, which is
+                // the right feedback for a typo'd alias.
+                let mut shell_args = vec!["open".to_string()];
+                shell_args.extend(argv[1..].iter().cloned());
+                return run_shell_cli(&shell_args);
             }
             _ => {}
         }
@@ -72,6 +77,9 @@ fn print_help() {
 
 usage:
   helm                          launch the TUI
+  helm <target>                 shortcut for `helm shell open <target>` —
+                                attach a persistent shell to any ssh alias,
+                                host, or IP (e.g. `helm router`, `helm web:deploy`)
   helm exec <alias> <cmd...>    run a one-shot command on a host through the
                                 running daemon (or TUI) over its control
                                 socket
@@ -157,7 +165,13 @@ usage:
   helm shell list <alias>             list helm-* sessions on the
                                       alias's tmux server (use `local`
                                       for your own machine)
-  helm shell close <target>           kill the session"
+  helm shell close <target>           kill the session
+
+tip: `helm <target>` is shorthand for `helm shell open <target>`.
+
+Every tmux call helm makes carries the flags from `tmux_flags` in
+config.toml (default `[\"-u\"]`, force UTF-8). Set `tmux_flags = []` to
+disable, or list your own."
     );
 }
 
@@ -166,6 +180,17 @@ fn run_shell_cli(args: &[String]) -> std::process::ExitCode {
         print_shell_help();
         return std::process::ExitCode::from(2);
     };
+    // Every tmux-touching subcommand needs the configured global tmux flags
+    // (e.g. `-u`) installed before it shells out. The shell CLI doesn't
+    // otherwise read config, so load it here — silently, since the agent
+    // calls these repeatedly. `help` touches no tmux, so skip the load.
+    if !matches!(sub.as_str(), "help" | "--help" | "-h") {
+        let flags = Config::load_silent().map(|c| c.tmux_flags()).unwrap_or_else(|e| {
+            eprintln!("helm: warning — config load failed ({e}); using default tmux flags");
+            Config::default().tmux_flags()
+        });
+        tmux::set_flags(flags);
+    }
     match sub.as_str() {
         "help" | "--help" | "-h" => {
             print_shell_help();
@@ -237,15 +262,14 @@ fn shell_open(args: &[String]) -> std::process::ExitCode {
     // resolve under a non-interactive ssh shell.
     use std::os::unix::process::CommandExt;
     let err = if alias == tmux::LOCAL_ALIAS {
-        std::process::Command::new("tmux")
-            .arg("new-session")
-            .arg("-A")
-            .arg("-s")
-            .arg(&session)
-            .exec()
+        let mut cmd = std::process::Command::new("tmux");
+        cmd.args(tmux::flags());
+        cmd.arg("new-session").arg("-A").arg("-s").arg(&session);
+        cmd.exec()
     } else {
         let remote = tmux::with_remote_path(&format!(
-            "tmux new-session -A -s {session}"
+            "{} new-session -A -s {session}",
+            tmux::tmux_prefix()
         ));
         std::process::Command::new("ssh")
             .arg("-t")
@@ -666,6 +690,7 @@ fn run_daemon_foreground() -> Result<()> {
         .init();
 
     let mut cfg = Config::load()?;
+    tmux::set_flags(cfg.tmux_flags());
     let ssh_hosts = load_ssh_hosts_for(&mut cfg);
     let agent_status = crate::ssh::agent::check(&ssh_hosts);
     if let Some(msg) = crate::ssh::agent::render_blocker(&agent_status, &ssh_hosts) {
@@ -828,6 +853,7 @@ fn run_tui() -> Result<()> {
         .init();
 
     let mut cfg = Config::load()?;
+    tmux::set_flags(cfg.tmux_flags());
     let ssh_hosts = load_ssh_hosts_for(&mut cfg);
     let agent_status = crate::ssh::agent::check(&ssh_hosts);
     if let Some(msg) = crate::ssh::agent::render_blocker(&agent_status, &ssh_hosts) {

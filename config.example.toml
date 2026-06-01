@@ -5,6 +5,12 @@
 # to keep your machine free of background daemons.
 # auto_daemon = true
 #
+# Flags inserted after `tmux` on every tmux call helm makes (the ssh'd
+# remote scripts AND the local attach). Defaults to ["-u"] when unset —
+# forces UTF-8 so box-drawing / unicode render even when the remote locale
+# doesn't advertise it. Set to [] to disable, or list your own.
+# tmux_flags = ["-u"]
+#
 # Optional side panes — all default to OFF. Flip a flag on only when you
 # wire up its backing dependency (VULTR_API_KEY, the printing-press money
 # CLIs, a working DNS resolver chain, etc.). Disabled panes don't show up

@@ -24,6 +24,14 @@ pub struct Config {
     /// when running `helm` on a laptop only ad-hoc).
     #[serde(default)]
     pub auto_daemon: Option<bool>,
+    /// Extra flags inserted after `tmux` on every tmux invocation helm
+    /// makes — both the ssh'd remote scripts and the local attach. Unset
+    /// defaults to `["-u"]` (force UTF-8, so box-drawing / unicode render
+    /// even when the remote locale doesn't advertise it). Set
+    /// `tmux_flags = []` to disable, or list your own (e.g.
+    /// `["-u", "-2"]`). Resolve via [`Config::tmux_flags`].
+    #[serde(default)]
+    pub tmux_flags: Option<Vec<String>>,
 }
 
 /// Optional Browse-pane toggles. Helm ships several side panes that are
@@ -330,14 +338,36 @@ fn xdg_config_helm_path() -> Option<PathBuf> {
 
 impl Config {
     pub fn load() -> Result<Self> {
+        Self::load_inner(true)
+    }
+
+    /// Like [`Config::load`] but without the `helm: config <path>` stderr
+    /// line. Used by the `helm shell` CLI, which loads config only to pick
+    /// up `tmux_flags` and is called repeatedly by the agent — the path
+    /// banner would be noise on every `read`/`send`.
+    pub fn load_silent() -> Result<Self> {
+        Self::load_inner(false)
+    }
+
+    fn load_inner(verbose: bool) -> Result<Self> {
         for p in candidate_paths() {
             if p.exists() {
-                eprintln!("helm: config {}", p.display());
+                if verbose {
+                    eprintln!("helm: config {}", p.display());
+                }
                 return Self::load_from(&p);
             }
         }
         // No config.toml found — return defaults so ssh_config-only operation works.
         Ok(Config::default())
+    }
+
+    /// Resolved global tmux flags (see the `tmux_flags` field). Unset →
+    /// `["-u"]`; an explicit empty list disables the default.
+    pub fn tmux_flags(&self) -> Vec<String> {
+        self.tmux_flags
+            .clone()
+            .unwrap_or_else(|| vec!["-u".to_string()])
     }
 
     pub fn load_from(path: &Path) -> Result<Self> {
@@ -427,6 +457,24 @@ mod tests {
         assert!(!cfg.hosts.is_empty());
         assert!(!cfg.businesses.is_empty());
         assert_eq!(cfg.hosts[0].provider, Provider::Local);
+    }
+
+    #[test]
+    fn tmux_flags_default_when_unset() {
+        let cfg = Config::default();
+        assert_eq!(cfg.tmux_flags(), vec!["-u".to_string()]);
+    }
+
+    #[test]
+    fn tmux_flags_explicit_empty_disables_default() {
+        let cfg: Config = toml::from_str("tmux_flags = []").unwrap();
+        assert!(cfg.tmux_flags().is_empty());
+    }
+
+    #[test]
+    fn tmux_flags_custom_list_passes_through() {
+        let cfg: Config = toml::from_str(r#"tmux_flags = ["-u", "-2"]"#).unwrap();
+        assert_eq!(cfg.tmux_flags(), vec!["-u".to_string(), "-2".to_string()]);
     }
 
     #[test]
