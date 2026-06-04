@@ -4,3 +4,6 @@ config.toml
 *.db-journal
 .env
 .claude/settings.local.json
+
+# Claude Code session markers (hooks write here)
+.claude/state/
