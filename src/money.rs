@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 use std::process::Command;
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::{Receiver, channel};
 use std::thread;
 
 use serde::Deserialize;
@@ -65,9 +65,10 @@ impl MoneyCache {
     }
 
     pub fn stripe_error_for_connect(&self, account_id: &str) -> Option<&str> {
-        self.stripe_connect_errors.get(account_id).map(String::as_str)
+        self.stripe_connect_errors
+            .get(account_id)
+            .map(String::as_str)
     }
-
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -137,7 +138,8 @@ pub fn spawn_money_fetch(connect_accounts: &[String]) -> Receiver<MoneyResult> {
 /// wrapper just waits for `Command::output`.
 fn shell_json(bin: &str, sub_args: &[&str]) -> Result<String, String> {
     let mut cmd = Command::new(bin);
-    cmd.args(sub_args).args(["--json", "--no-input", "--no-color"]);
+    cmd.args(sub_args)
+        .args(["--json", "--no-input", "--no-color"]);
     match cmd.output() {
         Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).into_owned()),
         Ok(o) => {
@@ -351,7 +353,8 @@ mod tests {
 
     #[test]
     fn parses_mercury_accounts_with_missing_currency() {
-        let json = r#"{"accounts":[{"id":"a","name":"x","currentBalance":1.0,"availableBalance":1.0}]}"#;
+        let json =
+            r#"{"accounts":[{"id":"a","name":"x","currentBalance":1.0,"availableBalance":1.0}]}"#;
         let v = parse_mercury_accounts(json).expect("parses");
         assert_eq!(v[0].currency, "USD");
     }
@@ -392,10 +395,18 @@ mod tests {
                 currency: "usd".into(),
             },
         );
-        cache.stripe_connect_errors.insert("acct_beta".into(), "401".into());
+        cache
+            .stripe_connect_errors
+            .insert("acct_beta".into(), "401".into());
 
         assert!(cache.stripe_for_connect("acct_alpha").is_some());
-        assert_eq!(cache.stripe_for_connect("acct_alpha").unwrap().available_cents, 100);
+        assert_eq!(
+            cache
+                .stripe_for_connect("acct_alpha")
+                .unwrap()
+                .available_cents,
+            100
+        );
         assert!(cache.stripe_for_connect("acct_beta").is_none());
         assert!(cache.stripe_for_connect("acct_missing").is_none());
 

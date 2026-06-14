@@ -27,7 +27,7 @@
 //! Text passed to `send_keys` is quoted for POSIX shell evaluation, so
 //! passwords / shell metachars / spaces survive the round-trip.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
@@ -77,9 +77,7 @@ pub fn tmux_prefix() -> String {
 /// Parse `alias[:label]` into `(alias, remote_session_name)`.
 pub fn parse_target(target: &str) -> (String, String) {
     match target.split_once(':') {
-        Some((alias, label)) if !label.is_empty() => {
-            (alias.to_string(), format!("helm-{label}"))
-        }
+        Some((alias, label)) if !label.is_empty() => (alias.to_string(), format!("helm-{label}")),
         Some((alias, _)) => (alias.to_string(), "helm".to_string()),
         None => (target.to_string(), "helm".to_string()),
     }
@@ -117,9 +115,7 @@ pub fn shell_quote(s: &str) -> String {
 /// see the augmented PATH on every branch. Idempotent on hosts that
 /// already have these dirs in `PATH`.
 pub fn with_remote_path(script: &str) -> String {
-    format!(
-        "export PATH=\"$PATH:/opt/homebrew/bin:/usr/local/bin:/opt/local/bin\"; {script}"
-    )
+    format!("export PATH=\"$PATH:/opt/homebrew/bin:/usr/local/bin:/opt/local/bin\"; {script}")
 }
 
 /// Build the command that runs `script` on the host identified by `alias`.
@@ -203,7 +199,10 @@ pub fn capture(target: &str, lines: u32) -> Result<String> {
     let q_session = shell_quote(&session);
     let neg = format!("-{lines}");
     let q_neg = shell_quote(&neg);
-    let remote = format!("{} capture-pane -t {q_session} -p -S {q_neg}", tmux_prefix());
+    let remote = format!(
+        "{} capture-pane -t {q_session} -p -S {q_neg}",
+        tmux_prefix()
+    );
     let out = runner_cmd(&alias, &remote)
         .output()
         .context("spawn tmux capture-pane runner")?;
@@ -250,7 +249,11 @@ pub fn list(alias: &str) -> Result<Vec<String>> {
 /// Kill the session for `target`.
 pub fn kill(target: &str) -> Result<()> {
     let (alias, session) = parse_target(target);
-    let remote = format!("{} kill-session -t {}", tmux_prefix(), shell_quote(&session));
+    let remote = format!(
+        "{} kill-session -t {}",
+        tmux_prefix(),
+        shell_quote(&session)
+    );
     let status = runner_cmd(&alias, &remote)
         .stdout(Stdio::null())
         .stderr(Stdio::inherit())
@@ -292,10 +295,7 @@ mod tests {
     fn target_with_multiple_colons_takes_first_split() {
         // `alias:a:b` → label is `a:b`, session name `helm-a:b`. tmux
         // session names containing `:` are fine when properly quoted.
-        assert_eq!(
-            parse_target("vps1:a:b"),
-            ("vps1".into(), "helm-a:b".into())
-        );
+        assert_eq!(parse_target("vps1:a:b"), ("vps1".into(), "helm-a:b".into()));
     }
 
     #[test]
@@ -309,7 +309,10 @@ mod tests {
     #[test]
     fn shell_quote_wraps_text_with_spaces_or_metachars() {
         assert_eq!(shell_quote("hello world"), "'hello world'");
-        assert_eq!(shell_quote("doas rcctl restart httpd"), "'doas rcctl restart httpd'");
+        assert_eq!(
+            shell_quote("doas rcctl restart httpd"),
+            "'doas rcctl restart httpd'"
+        );
         assert_eq!(shell_quote("$VAR | rm -rf /"), "'$VAR | rm -rf /'");
     }
 
@@ -362,10 +365,7 @@ mod tests {
     #[test]
     fn build_tmux_prefix_appends_flags_shell_quoted() {
         assert_eq!(build_tmux_prefix(&["-u".into()]), "tmux -u");
-        assert_eq!(
-            build_tmux_prefix(&["-u".into(), "-2".into()]),
-            "tmux -u -2"
-        );
+        assert_eq!(build_tmux_prefix(&["-u".into(), "-2".into()]), "tmux -u -2");
         // A flag with a space/metachar gets quoted so it survives the
         // remote shell intact.
         assert_eq!(

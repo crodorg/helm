@@ -24,7 +24,7 @@ use crossterm::{
         MouseEvent, MouseEventKind,
     },
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
     Terminal,
@@ -185,10 +185,12 @@ fn run_shell_cli(args: &[String]) -> std::process::ExitCode {
     // otherwise read config, so load it here — silently, since the agent
     // calls these repeatedly. `help` touches no tmux, so skip the load.
     if !matches!(sub.as_str(), "help" | "--help" | "-h") {
-        let flags = Config::load_silent().map(|c| c.tmux_flags()).unwrap_or_else(|e| {
-            eprintln!("helm: warning — config load failed ({e}); using default tmux flags");
-            Config::default().tmux_flags()
-        });
+        let flags = Config::load_silent()
+            .map(|c| c.tmux_flags())
+            .unwrap_or_else(|e| {
+                eprintln!("helm: warning — config load failed ({e}); using default tmux flags");
+                Config::default().tmux_flags()
+            });
         tmux::set_flags(flags);
     }
     match sub.as_str() {
@@ -238,9 +240,7 @@ fn shell_open(args: &[String]) -> std::process::ExitCode {
             eprintln!("helm: {e}");
             return std::process::ExitCode::FAILURE;
         }
-        eprintln!(
-            "helm: session ready on {alias} — attach with `helm shell open {target}`"
-        );
+        eprintln!("helm: session ready on {alias} — attach with `helm shell open {target}`");
         return std::process::ExitCode::SUCCESS;
     }
     // Attach path replaces the current process via exec(); log BEFORE the
@@ -721,7 +721,7 @@ fn run_daemon_foreground() -> Result<()> {
         .build()?;
 
     rt.block_on(async move {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
         let mut sigterm = signal(SignalKind::terminate())?;
         let mut sigint = signal(SignalKind::interrupt())?;
         let mut tick = tokio::time::interval(Duration::from_millis(100));
@@ -907,7 +907,10 @@ fn run_tui() -> Result<()> {
     }
     let _guard = match crate::ipc::server::start(socket.clone()) {
         Ok(handles) => {
-            eprintln!("helm: control socket at {}", handles.guard.socket_path.display());
+            eprintln!(
+                "helm: control socket at {}",
+                handles.guard.socket_path.display()
+            );
             app.engine.attach_jobs_rx(handles.jobs_rx);
             Some(handles.guard)
         }
@@ -978,7 +981,9 @@ fn run(terminal: &mut Term, app: &mut App) -> Result<()> {
             match event::read()? {
                 Event::Key(k) if k.kind == KeyEventKind::Press => handle_key(app, k.code),
                 Event::Mouse(m) => {
-                    let area = terminal.size().map(|s| Rect::new(0, 0, s.width, s.height))?;
+                    let area = terminal
+                        .size()
+                        .map(|s| Rect::new(0, 0, s.width, s.height))?;
                     handle_mouse(app, m, area);
                 }
                 _ => {}
@@ -1000,10 +1005,7 @@ fn handle_key(app: &mut App, code: KeyCode) {
     // is more confusing than helpful, so skip there too. Help itself
     // closes via `?` (handled in handle_help).
     if matches!(code, KeyCode::Char('?'))
-        && !matches!(
-            app.mode,
-            Mode::Help | Mode::Shortcuts | Mode::LogPicker
-        )
+        && !matches!(app.mode, Mode::Help | Mode::Shortcuts | Mode::LogPicker)
         && !(app.mode == Mode::Runner && app.runner.focus.is_some())
     {
         app.open_help();
@@ -1048,9 +1050,7 @@ fn handle_key(app: &mut App, code: KeyCode) {
 
 fn handle_shell_sessions(app: &mut App, code: KeyCode) {
     match code {
-        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('h') => {
-            app.close_shell_sessions()
-        }
+        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('h') => app.close_shell_sessions(),
         KeyCode::Char('j') | KeyCode::Down => app.shell_sessions_select_next(),
         KeyCode::Char('k') | KeyCode::Up => app.shell_sessions_select_prev(),
         KeyCode::Enter => app.open_selected_shell_session(),
@@ -1061,10 +1061,7 @@ fn handle_shell_sessions(app: &mut App, code: KeyCode) {
 }
 
 fn handle_help(app: &mut App, code: KeyCode) {
-    if matches!(
-        code,
-        KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q')
-    ) {
+    if matches!(code, KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q')) {
         app.close_help();
     }
 }
@@ -1080,10 +1077,10 @@ fn handle_log_picker(app: &mut App, code: KeyCode) {
 }
 
 fn handle_log_tail(app: &mut App, code: KeyCode) {
-    if let Some(state) = app.log_tail.as_ref() {
-        if handle_scroll_keys(&state.scroll, code) {
-            return;
-        }
+    if let Some(state) = app.log_tail.as_ref()
+        && handle_scroll_keys(&state.scroll, code)
+    {
+        return;
     }
     if matches!(code, KeyCode::Esc) {
         app.close_log_tail();
@@ -1132,10 +1129,10 @@ fn handle_money(app: &mut App, code: KeyCode) {
 }
 
 fn handle_dns(app: &mut App, code: KeyCode) {
-    if let Some(state) = app.dns_pane.as_ref() {
-        if handle_scroll_keys(&state.scroll, code) {
-            return;
-        }
+    if let Some(state) = app.dns_pane.as_ref()
+        && handle_scroll_keys(&state.scroll, code)
+    {
+        return;
     }
     match code {
         KeyCode::Esc => app.close_dns(),
@@ -1162,9 +1159,7 @@ fn handle_vultr(app: &mut App, code: KeyCode) {
     if app.vultr_confirm.is_some() {
         match code {
             KeyCode::Char('y') | KeyCode::Char('Y') => app.vultr_confirm_action(),
-            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                app.vultr_cancel_action()
-            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => app.vultr_cancel_action(),
             _ => {}
         }
         return;
@@ -1197,10 +1192,10 @@ fn handle_vultr(app: &mut App, code: KeyCode) {
 }
 
 fn handle_health(app: &mut App, code: KeyCode) {
-    if let Some(state) = app.health_pane.as_ref() {
-        if handle_scroll_keys(&state.scroll, code) {
-            return;
-        }
+    if let Some(state) = app.health_pane.as_ref()
+        && handle_scroll_keys(&state.scroll, code)
+    {
+        return;
     }
     match code {
         KeyCode::Esc => app.close_health(),
@@ -1210,10 +1205,10 @@ fn handle_health(app: &mut App, code: KeyCode) {
 }
 
 fn handle_processes(app: &mut App, code: KeyCode) {
-    if let Some(state) = app.processes_pane.as_ref() {
-        if handle_scroll_keys(&state.scroll, code) {
-            return;
-        }
+    if let Some(state) = app.processes_pane.as_ref()
+        && handle_scroll_keys(&state.scroll, code)
+    {
+        return;
     }
     match code {
         KeyCode::Esc => app.close_processes(),
@@ -1267,10 +1262,10 @@ fn handle_shortcuts(app: &mut App, code: KeyCode) {
 }
 
 fn handle_services(app: &mut App, code: KeyCode) {
-    if let Some(state) = app.services.as_ref() {
-        if handle_scroll_keys(&state.scroll, code) {
-            return;
-        }
+    if let Some(state) = app.services.as_ref()
+        && handle_scroll_keys(&state.scroll, code)
+    {
+        return;
     }
     match code {
         KeyCode::Esc => app.close_services(),
@@ -1359,12 +1354,12 @@ fn handle_runner(app: &mut App, code: KeyCode) {
             }
             KeyCode::Enter => {
                 let pw = std::mem::take(&mut app.runner.password);
-                if let Some(h) = app.run_handle.as_mut() {
-                    if let Err(e) = h.send_line(&pw) {
-                        app.runner
-                            .output
-                            .push(OutputLine::System(format!("write password failed: {e}")));
-                    }
+                if let Some(h) = app.run_handle.as_mut()
+                    && let Err(e) = h.send_line(&pw)
+                {
+                    app.runner
+                        .output
+                        .push(OutputLine::System(format!("write password failed: {e}")));
                 }
                 app.runner.focus = None;
             }
@@ -1409,9 +1404,9 @@ fn submit_command(app: &mut App) {
     };
     let alias = host.ssh_alias.clone();
 
-    app.runner.output.push(OutputLine::System(format!(
-        "$ ssh {alias} '{cmd}'"
-    )));
+    app.runner
+        .output
+        .push(OutputLine::System(format!("$ ssh {alias} '{cmd}'")));
 
     match spawn_remote(&alias, &cmd) {
         Ok(handle) => {
@@ -1447,8 +1442,7 @@ fn unix_now() -> i64 {
 fn run_shell_session(terminal: &mut Term, app: &mut App, target: &str) -> Result<()> {
     restore_terminal(terminal)?;
 
-    let exe = std::env::current_exe()
-        .unwrap_or_else(|_| std::path::PathBuf::from("helm"));
+    let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("helm"));
     let status = Command::new(exe)
         .arg("shell")
         .arg("open")

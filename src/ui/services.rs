@@ -56,12 +56,10 @@ fn draw_header(f: &mut Frame, area: Rect, s: &crate::app::ServicesState) {
             Style::default().fg(Color::Red),
         ))
     } else {
-        Line::from(vec![
-            Span::styled(
-                format!("loading via {}… ", init_system(s.os)),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ])
+        Line::from(vec![Span::styled(
+            format!("loading via {}… ", init_system(s.os)),
+            Style::default().fg(Color::DarkGray),
+        )])
     };
 
     f.render_widget(Paragraph::new(summary), area);
@@ -95,7 +93,10 @@ fn draw_body(f: &mut Frame, area: Rect, s: &crate::app::ServicesState) {
             ListItem::new(Line::from(vec![
                 Span::styled(
                     label,
-                    Style::default().fg(Color::Black).bg(color).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(color)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("  "),
                 Span::styled(
@@ -110,7 +111,11 @@ fn draw_body(f: &mut Frame, area: Rect, s: &crate::app::ServicesState) {
     let viewport = area.height as usize;
     let start = s.scroll.render_start(total, viewport);
     let end = (start + viewport).min(total);
-    let visible: Vec<ListItem> = all_items.into_iter().skip(start).take(end - start).collect();
+    let visible: Vec<ListItem> = all_items
+        .into_iter()
+        .skip(start)
+        .take(end - start)
+        .collect();
     f.render_widget(List::new(visible), area);
 }
 
@@ -151,7 +156,9 @@ fn state_color(s: ServiceState) -> Color {
 fn badge(text: &str, bg: Color) -> Span<'static> {
     Span::styled(
         text.to_string(),
-        Style::default().fg(Color::Black).bg(bg).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Black)
+            .bg(bg)
+            .add_modifier(Modifier::BOLD),
     )
 }
-

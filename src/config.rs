@@ -39,7 +39,7 @@ pub struct Config {
 /// DNS resolver setup, the printing-press money CLIs). They default to
 /// off so a fresh install shows only the panes everyone needs; flip the
 /// relevant flag in `config.toml` to surface them.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct Features {
     #[serde(default)]
     pub health: bool,
@@ -49,17 +49,6 @@ pub struct Features {
     pub dns: bool,
     #[serde(default)]
     pub money: bool,
-}
-
-impl Default for Features {
-    fn default() -> Self {
-        Self {
-            health: false,
-            vultr: false,
-            dns: false,
-            money: false,
-        }
-    }
 }
 
 impl Features {

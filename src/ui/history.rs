@@ -72,7 +72,9 @@ fn draw_header(f: &mut Frame, area: Rect) {
 fn header_cell(s: &str) -> Span<'static> {
     Span::styled(
         s.to_string(),
-        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD),
     )
 }
 
@@ -80,8 +82,7 @@ fn draw_body(f: &mut Frame, area: Rect, s: &HistoryState) {
     let viewport = area.height as usize;
     let total = s.entries.len();
     // Keep the selected row visible by nudging the scroll offset to wrap it.
-    s.scroll
-        .ensure_visible(s.selected, total, viewport);
+    s.scroll.ensure_visible(s.selected, total, viewport);
     let start = s.scroll.render_start(total, viewport);
     let end = (start + viewport).min(total);
 
@@ -128,7 +129,10 @@ fn row_to_item<'a>(r: &RunRecord, selected: bool) -> ListItem<'a> {
         Span::styled("  ".to_string(), base),
         Span::styled(format!("{:<5}", src), base),
         Span::styled("  ".to_string(), base),
-        Span::styled(format!("{:<14}", truncate(&r.alias, 14)), base.add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!("{:<14}", truncate(&r.alias, 14)),
+            base.add_modifier(Modifier::BOLD),
+        ),
         Span::styled("  ".to_string(), base),
         Span::styled(exit_cell, base.fg(exit_color).add_modifier(Modifier::BOLD)),
         Span::styled("  ".to_string(), base),

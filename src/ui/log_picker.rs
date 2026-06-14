@@ -9,10 +9,7 @@ use ratatui::{
 use crate::app::App;
 
 pub fn draw(f: &mut Frame, area: Rect, app: &App) {
-    let host_name = app
-        .selected_host()
-        .map(|h| h.name.as_str())
-        .unwrap_or("?");
+    let host_name = app.selected_host().map(|h| h.name.as_str()).unwrap_or("?");
     let logs = app.applicable_logs();
     let modal = centered_rect(
         70,
@@ -56,10 +53,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("  "),
-                Span::styled(
-                    truncate(&l.path, 60),
-                    Style::default().fg(Color::DarkGray),
-                ),
+                Span::styled(truncate(&l.path, 60), Style::default().fg(Color::DarkGray)),
             ]));
         }
     }

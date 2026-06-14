@@ -14,7 +14,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use crate::history::{HistoryStore, LineKind, LineRecord, RunSource};
 use crate::ipc::protocol::{Event as IpcEvent, Request as IpcRequest};
 use crate::ipc::server::Job;
-use crate::ssh::{spawn_remote, RunEvent, RunHandle};
+use crate::ssh::{RunEvent, RunHandle, spawn_remote};
 
 /// One completed (or in-flight) agent-initiated run. Survives across helm
 /// restarts when the history store is attached.
@@ -167,9 +167,7 @@ impl Engine {
             cmd: cmd.clone(),
             started_at: Instant::now(),
             started_at_unix: now_unix(),
-            output: vec![AgentOutputLine::System(format!(
-                "$ ssh {alias} '{cmd}'"
-            ))],
+            output: vec![AgentOutputLine::System(format!("$ ssh {alias} '{cmd}'"))],
             exit: None,
             from_history: false,
         };
@@ -215,13 +213,13 @@ impl Engine {
         }
         if disconnected {
             if let Some(active) = self.agent_active.take() {
-                if let Some(entry) = self.agent_history.last_mut() {
-                    if entry.exit.is_none() {
-                        entry.exit = Some(-1);
-                        entry
-                            .output
-                            .push(AgentOutputLine::System("(channel closed)".into()));
-                    }
+                if let Some(entry) = self.agent_history.last_mut()
+                    && entry.exit.is_none()
+                {
+                    entry.exit = Some(-1);
+                    entry
+                        .output
+                        .push(AgentOutputLine::System("(channel closed)".into()));
                 }
                 let _ = active.response_tx.send(IpcEvent::Done { exit: -1 });
             }
@@ -293,11 +291,7 @@ impl Engine {
         if entry.from_history {
             return;
         }
-        let lines: Vec<LineRecord> = entry
-            .output
-            .iter()
-            .map(agent_line_to_record)
-            .collect();
+        let lines: Vec<LineRecord> = entry.output.iter().map(agent_line_to_record).collect();
         let duration_ms = i64::try_from(entry.started_at.elapsed().as_millis()).ok();
         if let Err(e) = store.insert_run(
             RunSource::Agent,

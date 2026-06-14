@@ -99,7 +99,9 @@ fn draw_header(f: &mut Frame, area: Rect) {
 fn header_cell(s: &str) -> Span<'static> {
     Span::styled(
         s.to_string(),
-        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD),
     )
 }
 
@@ -119,7 +121,11 @@ fn draw_body(f: &mut Frame, area: Rect, app: &App, cache: &VultrCache) {
         .ensure_visible(app.vultr_selected, total, viewport);
     let start = app.vultr_scroll.render_start(total, viewport);
     let end = (start + viewport).min(total);
-    let visible: Vec<ListItem> = all_items.into_iter().skip(start).take(end - start).collect();
+    let visible: Vec<ListItem> = all_items
+        .into_iter()
+        .skip(start)
+        .take(end - start)
+        .collect();
     f.render_widget(List::new(visible), area);
 
     // Overlay the confirm modal on top of the body when a request is pending.
@@ -132,10 +138,19 @@ fn draw_confirm_modal(f: &mut Frame, area: Rect, confirm: &crate::app::VultrConf
     // Centered 60% × 30% box.
     let w = (area.width * 6 / 10).max(50);
     // 7 rows for non-billable actions, +1 for the snapshot cost warning.
-    let h = if confirm.action == crate::vultr::ActionKind::Snapshot { 8 } else { 7 };
+    let h = if confirm.action == crate::vultr::ActionKind::Snapshot {
+        8
+    } else {
+        7
+    };
     let x = area.x + area.width.saturating_sub(w) / 2;
     let y = area.y + area.height.saturating_sub(h) / 2;
-    let modal_area = Rect { x, y, width: w, height: h };
+    let modal_area = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -151,14 +166,18 @@ fn draw_confirm_modal(f: &mut Frame, area: Rect, confirm: &crate::app::VultrConf
             Span::raw("action: "),
             Span::styled(
                 confirm.action.label(),
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]),
         ratatui::text::Line::from(vec![
             Span::raw("target: "),
             Span::styled(
                 confirm.label.clone(),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 format!("  ({})", confirm.instance_id),
@@ -170,11 +189,15 @@ fn draw_confirm_modal(f: &mut Frame, area: Rect, confirm: &crate::app::VultrConf
         lines.push(ratatui::text::Line::from(vec![
             Span::styled(
                 "$ ",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 "BILLABLE",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" — vultr charges ~$0.05/GB/mo until deleted"),
         ]));
@@ -183,7 +206,9 @@ fn draw_confirm_modal(f: &mut Frame, area: Rect, confirm: &crate::app::VultrConf
     lines.push(ratatui::text::Line::from(vec![
         Span::styled(
             "[y]",
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" confirm   "),
         Span::styled(

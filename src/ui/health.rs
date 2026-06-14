@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::app::{App, HealthState};
-use crate::inventory::health::{now_unix, Health};
+use crate::inventory::health::{Health, now_unix};
 
 pub fn draw(f: &mut Frame, area: Rect, app: &App) {
     let Some(state) = app.health_pane.as_ref() else {
@@ -43,27 +43,37 @@ fn draw_header(f: &mut Frame, area: Rect) {
     let line = Line::from(vec![
         Span::styled(
             format!("{:<16}", "BUSINESS"),
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
         Span::styled(
             format!("{:<32}", "DOMAIN"),
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
         Span::styled(
             format!("{:>4}", "HTTP"),
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
         Span::styled(
             format!("{:>6}", "ms"),
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
         Span::styled(
             format!("{:>6}", "TLS d"),
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
         ),
     ]);
     f.render_widget(Paragraph::new(line), area);
@@ -84,7 +94,11 @@ fn draw_body(f: &mut Frame, area: Rect, s: &HealthState) {
     let viewport = area.height as usize;
     let start = s.scroll.render_start(total, viewport);
     let end = (start + viewport).min(total);
-    let visible: Vec<ListItem> = all_items.into_iter().skip(start).take(end - start).collect();
+    let visible: Vec<ListItem> = all_items
+        .into_iter()
+        .skip(start)
+        .take(end - start)
+        .collect();
     f.render_widget(List::new(visible), area);
 }
 
@@ -116,10 +130,7 @@ fn row_to_item<'a>(name: &str, row: Option<&Health>, now: i64) -> ListItem<'a> {
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
             )
         }
-        None => (
-            format!("{:>4}", "?"),
-            Style::default().fg(Color::DarkGray),
-        ),
+        None => (format!("{:>4}", "?"), Style::default().fg(Color::DarkGray)),
     };
 
     let ms_cell = match h.http_ms {
@@ -145,10 +156,7 @@ fn row_to_item<'a>(name: &str, row: Option<&Health>, now: i64) -> ListItem<'a> {
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
             )
         }
-        None => (
-            format!("{:>6}", "?"),
-            Style::default().fg(Color::DarkGray),
-        ),
+        None => (format!("{:>6}", "?"), Style::default().fg(Color::DarkGray)),
     };
 
     let mut spans = vec![

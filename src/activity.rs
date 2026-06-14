@@ -247,7 +247,9 @@ mod tests {
 
     #[test]
     fn privilege_escalation_after_pipe() {
-        assert!(has_privilege_escalation("cat /etc/passwd | sudo tee /tmp/x"));
+        assert!(has_privilege_escalation(
+            "cat /etc/passwd | sudo tee /tmp/x"
+        ));
     }
 
     #[test]

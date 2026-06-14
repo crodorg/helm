@@ -15,7 +15,7 @@
 
 use std::net::IpAddr;
 use std::process::Command;
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::{Receiver, channel};
 use std::thread;
 
 use crate::config::Business;
@@ -82,10 +82,7 @@ pub struct DnsResult {
 /// Spawn one thread per business. `expected_ips[i]` is the IP literal we
 /// expect for `businesses[i]` (or None when the host's hostname is a DNS
 /// name, no IP comparison possible).
-pub fn spawn_dns(
-    businesses: &[Business],
-    expected_ips: &[Option<String>],
-) -> Receiver<DnsResult> {
+pub fn spawn_dns(businesses: &[Business], expected_ips: &[Option<String>]) -> Receiver<DnsResult> {
     let (tx, rx) = channel();
     for (idx, biz) in businesses.iter().enumerate() {
         if biz.primary_domain.trim().is_empty() {
@@ -130,7 +127,12 @@ fn probe_one(name: &str, domain: &str, expected_ip: Option<String>) -> DnsCheck 
             Err(e) => errs.push(format!("{rtype}: {e}")),
         }
     }
-    if !errs.is_empty() && c.a.is_empty() && c.aaaa.is_empty() && c.mx.is_empty() && c.caa.is_empty() {
+    if !errs.is_empty()
+        && c.a.is_empty()
+        && c.aaaa.is_empty()
+        && c.mx.is_empty()
+        && c.caa.is_empty()
+    {
         c.error = Some(errs.join("; "));
     }
     c.compute_verdict();
@@ -162,12 +164,8 @@ fn pick_tool() -> Option<Tool> {
 
 fn query(tool: Tool, domain: &str, rtype: &str) -> Result<Vec<String>, String> {
     let output = match tool {
-        Tool::Drill => Command::new("drill")
-            .args(["-Q", domain, rtype])
-            .output(),
-        Tool::Dig => Command::new("dig")
-            .args(["+short", domain, rtype])
-            .output(),
+        Tool::Drill => Command::new("drill").args(["-Q", domain, rtype]).output(),
+        Tool::Dig => Command::new("dig").args(["+short", domain, rtype]).output(),
     };
     match output {
         Ok(o) if o.status.success() => {

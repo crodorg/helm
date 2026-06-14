@@ -156,8 +156,7 @@ pub fn render_blocker(status: &AgentStatus, ssh_hosts: &[SshHost]) -> Option<Str
     match status {
         AgentStatus::Ok => None,
         AgentStatus::SshAddMissing => Some(
-            "helm: `ssh-add` not on PATH. Install OpenSSH client tools, then re-run helm."
-                .into(),
+            "helm: `ssh-add` not on PATH. Install OpenSSH client tools, then re-run helm.".into(),
         ),
         AgentStatus::AgentUnreachable => {
             let keys = unique_identity_files(ssh_hosts);
@@ -206,10 +205,10 @@ fn unique_identity_files(ssh_hosts: &[SshHost]) -> Vec<PathBuf> {
     let mut seen = std::collections::BTreeSet::new();
     let mut out = Vec::new();
     for h in ssh_hosts {
-        if let Some(p) = &h.identity_file {
-            if seen.insert(p.clone()) {
-                out.push(p.clone());
-            }
+        if let Some(p) = &h.identity_file
+            && seen.insert(p.clone())
+        {
+            out.push(p.clone());
         }
     }
     out
@@ -230,7 +229,9 @@ fn tildify(p: &Path) -> String {
 pub fn status_message(s: &AgentStatus) -> Option<String> {
     match s {
         AgentStatus::Ok => None,
-        AgentStatus::AgentUnreachable => Some("ssh-agent unreachable: eval $(ssh-agent) && ssh-add".into()),
+        AgentStatus::AgentUnreachable => {
+            Some("ssh-agent unreachable: eval $(ssh-agent) && ssh-add".into())
+        }
         AgentStatus::SshAddMissing => Some("ssh-add not on PATH".into()),
         AgentStatus::MissingKeys(ks) => {
             let mut parts: Vec<String> = ks
@@ -247,7 +248,10 @@ pub fn status_message(s: &AgentStatus) -> Option<String> {
                 })
                 .collect();
             parts.sort();
-            Some(format!("ssh-agent missing: {} — run ssh-add", parts.join("; ")))
+            Some(format!(
+                "ssh-agent missing: {} — run ssh-add",
+                parts.join("; ")
+            ))
         }
     }
 }

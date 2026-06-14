@@ -45,10 +45,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
     let total = state.lines.len();
     let start = state.scroll.render_start(total, visible);
     let end = (start + visible).min(total);
-    let items: Vec<ListItem> = state.lines[start..end]
-        .iter()
-        .map(render_line)
-        .collect();
+    let items: Vec<ListItem> = state.lines[start..end].iter().map(render_line).collect();
     let list = List::new(items);
     let mut list_state = ListState::default();
     if !state.lines[start..end].is_empty() {

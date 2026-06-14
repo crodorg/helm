@@ -47,9 +47,7 @@ pub fn parse_rcctl(on: &str, started: &str, failed: &str) -> Vec<Service> {
         map.insert(name.clone(), ServiceState::Stopped);
     }
     for name in &started {
-        let entry = map
-            .entry(name.clone())
-            .or_insert(ServiceState::Untracked);
+        let entry = map.entry(name.clone()).or_insert(ServiceState::Untracked);
         if *entry == ServiceState::Stopped {
             *entry = ServiceState::Started;
         }

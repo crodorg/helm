@@ -66,7 +66,9 @@ fn draw_processes(f: &mut Frame, area: Rect, host_name: &str, s: &crate::app::Pr
             "{:>5} {:>5} {:>7} {:>6} {:<10} {}",
             "%CPU", "%MEM", "RSS_MB", "PID", "USER", "COMMAND"
         ),
-        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD),
     ))));
     for p in procs {
         lines.push(ListItem::new(format_proc_row(p)));
@@ -139,7 +141,9 @@ fn draw_ports(f: &mut Frame, area: Rect, s: &crate::app::ProcessesState) {
     let mut lines: Vec<ListItem> = Vec::with_capacity(ports.len() + 1);
     lines.push(ListItem::new(Line::from(Span::styled(
         format!("{:<6} {}", "PROTO", "LOCAL"),
-        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD),
     ))));
     for p in ports {
         lines.push(ListItem::new(format_port_row(p)));
@@ -156,7 +160,9 @@ fn format_port_row(p: &ListeningSocket) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             format!("{:<6}", p.proto),
-            Style::default().fg(proto_color).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(proto_color)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
         Span::raw(p.local.clone()),

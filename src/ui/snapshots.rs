@@ -62,7 +62,10 @@ fn assert_snapshot(name: &str, actual: &str) {
         if !update {
             // First-run bootstrap: warn the dev that a new fixture was
             // written so they can review it before committing.
-            eprintln!("snapshot[{name}]: created new fixture at {}", path.display());
+            eprintln!(
+                "snapshot[{name}]: created new fixture at {}",
+                path.display()
+            );
         }
         return;
     }

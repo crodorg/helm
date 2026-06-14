@@ -25,7 +25,7 @@
 
 use std::io::Write;
 use std::process::{Command, Stdio};
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::{Receiver, channel};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -71,23 +71,27 @@ pub fn spawn_postmark_fetch(businesses: &[Business]) -> Receiver<PostmarkResult>
         let tx = tx.clone();
         thread::spawn(move || {
             let outcome = fetch_one(&token, &from, &to);
-            let _ = tx.send(PostmarkResult { business_name: name, outcome });
+            let _ = tx.send(PostmarkResult {
+                business_name: name,
+                outcome,
+            });
         });
     }
     rx
 }
 
 fn fetch_one(token: &str, from: &str, to: &str) -> Result<PostmarkStats, String> {
-    let url = format!(
-        "https://api.postmarkapp.com/stats/outbound?fromdate={from}&todate={to}"
-    );
+    let url = format!("https://api.postmarkapp.com/stats/outbound?fromdate={from}&todate={to}");
     // Token via stdin -H @- avoids argv exposure to `ps -ax`.
     let mut child = Command::new("curl")
         .args([
             "-s",
-            "-m", "10",
-            "-H", "Accept: application/json",
-            "-H", "@-",
+            "-m",
+            "10",
+            "-H",
+            "Accept: application/json",
+            "-H",
+            "@-",
             &url,
         ])
         .stdin(Stdio::piped())
@@ -140,10 +144,10 @@ pub fn parse_stats(json: &str) -> Result<PostmarkStats, String> {
         message: Option<String>,
     }
     let r: Resp = serde_json::from_str(json).map_err(|e| format!("postmark json: {e}"))?;
-    if let (Some(code), Some(msg)) = (r.error_code, r.message.as_ref()) {
-        if code != 0 {
-            return Err(format!("postmark error {code}: {msg}"));
-        }
+    if let (Some(code), Some(msg)) = (r.error_code, r.message.as_ref())
+        && code != 0
+    {
+        return Err(format!("postmark error {code}: {msg}"));
     }
     Ok(PostmarkStats {
         sent: r.sent,

@@ -52,7 +52,9 @@ mod tests {
 
     #[test]
     fn pong_roundtrip() {
-        let e = Event::Pong { version: "0.1.0".into() };
+        let e = Event::Pong {
+            version: "0.1.0".into(),
+        };
         let s = serde_json::to_string(&e).unwrap();
         let back: Event = serde_json::from_str(&s).unwrap();
         match back {

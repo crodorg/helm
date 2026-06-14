@@ -19,7 +19,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 
 use crate::ipc::protocol::{Event, Request};
@@ -168,20 +168,15 @@ fn handle_client(
 }
 
 fn write_event(mut stream: UnixStream, event: &Event) -> std::io::Result<()> {
-    let line = serde_json::to_string(event)
-        .map_err(std::io::Error::other)?;
+    let line = serde_json::to_string(event).map_err(std::io::Error::other)?;
     stream.write_all(line.as_bytes())?;
     stream.write_all(b"\n")?;
     stream.flush()
 }
 
-fn forward_events(
-    mut stream: UnixStream,
-    response_rx: Receiver<Event>,
-) -> std::io::Result<()> {
+fn forward_events(mut stream: UnixStream, response_rx: Receiver<Event>) -> std::io::Result<()> {
     while let Ok(ev) = response_rx.recv() {
-        let line = serde_json::to_string(&ev)
-            .map_err(std::io::Error::other)?;
+        let line = serde_json::to_string(&ev).map_err(std::io::Error::other)?;
         if stream.write_all(line.as_bytes()).is_err() {
             // client disconnected; abandon further writes
             break;

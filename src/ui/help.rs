@@ -14,9 +14,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
     let raw = bindings_for(origin, app.runner.focus);
     let bindings: Vec<crate::help::Binding> = raw
         .iter()
-        .filter(|b| {
-            origin != Mode::Browse || app.config.features.browse_key_enabled(b.key)
-        })
+        .filter(|b| origin != Mode::Browse || app.config.features.browse_key_enabled(b.key))
         .copied()
         .collect();
     let title = mode_title(origin);

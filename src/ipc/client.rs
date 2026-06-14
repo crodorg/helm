@@ -72,8 +72,9 @@ fn connect_and_stream(path: &Path, request: &Request) -> anyhow::Result<i32> {
 pub fn ping_socket(path: &Path) -> anyhow::Result<Option<String>> {
     let mut stream = match UnixStream::connect(path) {
         Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound
-            || e.kind() == std::io::ErrorKind::ConnectionRefused =>
+        Err(e)
+            if e.kind() == std::io::ErrorKind::NotFound
+                || e.kind() == std::io::ErrorKind::ConnectionRefused =>
         {
             return Ok(None);
         }
@@ -107,8 +108,9 @@ pub fn ping_socket(path: &Path) -> anyhow::Result<Option<String>> {
 pub fn shutdown_socket(path: &Path, wait: Duration) -> anyhow::Result<bool> {
     let mut stream = match UnixStream::connect(path) {
         Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound
-            || e.kind() == std::io::ErrorKind::ConnectionRefused =>
+        Err(e)
+            if e.kind() == std::io::ErrorKind::NotFound
+                || e.kind() == std::io::ErrorKind::ConnectionRefused =>
         {
             return Ok(true);
         }

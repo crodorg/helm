@@ -87,10 +87,7 @@ fn render_record(r: &ActivityRecord) -> Vec<Line<'static>> {
     };
 
     let mut header_spans: Vec<Span<'static>> = vec![
-        Span::styled(
-            format!("{time} "),
-            Style::default().fg(Color::DarkGray),
-        ),
+        Span::styled(format!("{time} "), Style::default().fg(Color::DarkGray)),
         exit_span,
         Span::styled(
             format!("{kind:<5} "),

@@ -1,6 +1,6 @@
 use std::io::{Read, Write};
 use std::process::{ChildStdin, Command, Stdio};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 
 /// Events emitted by a remote command in progress.

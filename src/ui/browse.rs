@@ -21,8 +21,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
     let bindings: Vec<crate::help::Binding> = raw
         .iter()
         .filter(|b| {
-            app.mode != crate::app::Mode::Browse
-                || app.config.features.browse_key_enabled(b.key)
+            app.mode != crate::app::Mode::Browse || app.config.features.browse_key_enabled(b.key)
         })
         .copied()
         .collect();
@@ -56,10 +55,7 @@ fn draw_keys_palette(f: &mut Frame, area: Rect, bindings: &[crate::help::Binding
         .map(|b| {
             Line::from(vec![
                 Span::raw(" "),
-                Span::styled(
-                    format!("[{}]", b.key),
-                    Style::default().fg(Color::Yellow),
-                ),
+                Span::styled(format!("[{}]", b.key), Style::default().fg(Color::Yellow)),
                 Span::raw(" ".repeat(max_key.saturating_sub(b.key.len()) + 2)),
                 Span::styled(b.action, Style::default().fg(Color::White)),
             ])
@@ -80,7 +76,10 @@ fn draw_hosts(f: &mut Frame, area: Rect, app: &App) {
             ListItem::new(Line::from(vec![
                 badge,
                 Span::raw(" "),
-                Span::styled(h.name.clone(), Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    h.name.clone(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Span::raw("  "),
                 Span::styled(
                     h.display_hostname().to_string(),
@@ -129,28 +128,25 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
                     Style::default().fg(Color::Gray),
                 )));
             }
-            if let Some(cache) = app.vultr_cache.as_ref() {
-                if let Some(inst) = cache.instance_for_ip(h.display_hostname()) {
-                    v.push(Line::from(""));
-                    let cost = cache
-                        .cost_for(&inst.plan)
-                        .map(|c| format!("${c:.2}/mo"))
-                        .unwrap_or_else(|| "?".into());
-                    v.push(kv(
-                        "vultr",
-                        &format!(
-                            "region={}  plan={}  {}",
-                            inst.region, inst.plan, cost
-                        ),
-                    ));
-                    v.push(kv(
-                        "",
-                        &format!(
-                            "status={}  power={}  id={}",
-                            inst.status, inst.power_status, inst.id
-                        ),
-                    ));
-                }
+            if let Some(cache) = app.vultr_cache.as_ref()
+                && let Some(inst) = cache.instance_for_ip(h.display_hostname())
+            {
+                v.push(Line::from(""));
+                let cost = cache
+                    .cost_for(&inst.plan)
+                    .map(|c| format!("${c:.2}/mo"))
+                    .unwrap_or_else(|| "?".into());
+                v.push(kv(
+                    "vultr",
+                    &format!("region={}  plan={}  {}", inst.region, inst.plan, cost),
+                ));
+                v.push(kv(
+                    "",
+                    &format!(
+                        "status={}  power={}  id={}",
+                        inst.status, inst.power_status, inst.id
+                    ),
+                ));
             }
             let bizes: Vec<_> = app
                 .config
@@ -172,10 +168,7 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
                             Style::default().add_modifier(Modifier::BOLD),
                         ),
                         Span::raw("  "),
-                        Span::styled(
-                            b.primary_domain.clone(),
-                            Style::default().fg(Color::Cyan),
-                        ),
+                        Span::styled(b.primary_domain.clone(), Style::default().fg(Color::Cyan)),
                     ]));
                     push_money_lines(&mut v, b, app);
                     push_postmark_lines(&mut v, b, app);
@@ -184,16 +177,15 @@ fn draw_detail(f: &mut Frame, area: Rect, app: &App) {
             v
         }
     };
-    let p = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+    let p = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
     f.render_widget(p, area);
 }
 
 fn kv(k: &str, v: &str) -> Line<'static> {
     Line::from(vec![
-        Span::styled(
-            format!("  {:<10}", k),
-            Style::default().fg(Color::DarkGray),
-        ),
+        Span::styled(format!("  {:<10}", k), Style::default().fg(Color::DarkGray)),
         Span::raw(v.to_string()),
     ])
 }
@@ -208,7 +200,11 @@ fn push_money_lines(v: &mut Vec<Line<'static>>, b: &crate::config::Business, app
             // No cache yet: show a placeholder only if any linkage is set,
             // so the user knows the row is intentional and pending.
             if b.stripe_account_id.is_some() || b.mercury_account_id.is_some() {
-                v.push(money_line("money", "(fetching… press m to force)", Color::DarkGray));
+                v.push(money_line(
+                    "money",
+                    "(fetching… press m to force)",
+                    Color::DarkGray,
+                ));
             }
             return;
         }
@@ -260,8 +256,13 @@ pub fn push_postmark_lines(v: &mut Vec<Line<'static>>, b: &crate::config::Busine
     let body = match app.postmark_results.get(&b.name) {
         Some(Ok(s)) => format!(
             "{} sent  {} bounced ({:.1}%)  {} spam ({:.1}%)   {}→{}",
-            s.sent, s.bounced, s.bounce_rate, s.spam_complaints, s.spam_rate,
-            s.from_date, s.to_date,
+            s.sent,
+            s.bounced,
+            s.bounce_rate,
+            s.spam_complaints,
+            s.spam_rate,
+            s.from_date,
+            s.to_date,
         ),
         Some(Err(e)) => format!("error: {e}"),
         _ if app.postmark_rx.is_some() => "(fetching…)".to_string(),

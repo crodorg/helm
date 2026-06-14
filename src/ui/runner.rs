@@ -23,10 +23,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_output(f: &mut Frame, area: Rect, app: &App) {
-    let host = app
-        .selected_host()
-        .map(|h| h.name.as_str())
-        .unwrap_or("?");
+    let host = app.selected_host().map(|h| h.name.as_str()).unwrap_or("?");
 
     let title = format!("runner › {host}");
     let block = Block::default().borders(Borders::ALL).title(title);
@@ -47,7 +44,9 @@ fn draw_output(f: &mut Frame, area: Rect, app: &App) {
             }
             OutputLine::System(s) => Line::from(Span::styled(
                 format!("· {s}"),
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::ITALIC),
             )),
         })
         .collect();

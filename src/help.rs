@@ -80,15 +80,9 @@ const BROWSE: [Binding; 18] = [
     b("q", "quit"),
 ];
 
-const RUNNER_PW: [Binding; 2] = [
-    b("enter", "submit password"),
-    b("esc", "cancel"),
-];
+const RUNNER_PW: [Binding; 2] = [b("enter", "submit password"), b("esc", "cancel")];
 
-const RUNNER_CMD: [Binding; 2] = [
-    b("enter", "run"),
-    b("h/esc", "back"),
-];
+const RUNNER_CMD: [Binding; 2] = [b("enter", "run"), b("h/esc", "back")];
 
 const RUNNER: [Binding; 7] = [
     b("j/k", "scroll"),
@@ -110,10 +104,7 @@ const SERVICES: [Binding; 7] = [
     b("q", "back"),
 ];
 
-const SHORTCUTS: [Binding; 2] = [
-    b("a-z", "fire shortcut"),
-    b("esc", "cancel"),
-];
+const SHORTCUTS: [Binding; 2] = [b("a-z", "fire shortcut"), b("esc", "cancel")];
 
 const AGENT_TAIL: [Binding; 5] = [
     b("j/k", "scroll"),
@@ -157,10 +148,7 @@ const MONEY: [Binding; 4] = [
     b("h/esc", "back"),
 ];
 
-const LOG_PICKER: [Binding; 2] = [
-    b("a-z", "tail this log"),
-    b("esc", "cancel"),
-];
+const LOG_PICKER: [Binding; 2] = [b("a-z", "tail this log"), b("esc", "cancel")];
 
 const LOG_TAIL: [Binding; 5] = [
     b("j/k", "scroll"),
@@ -196,11 +184,7 @@ const SHELL_SESSIONS: [Binding; 7] = [
     b("q", "back"),
 ];
 
-const HELP: [Binding; 3] = [
-    b("?", "close"),
-    b("esc", "close"),
-    b("q", "close"),
-];
+const HELP: [Binding; 3] = [b("?", "close"), b("esc", "close"), b("q", "close")];
 
 #[cfg(test)]
 mod tests {

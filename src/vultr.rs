@@ -20,7 +20,7 @@
 //! The key is logged nowhere.
 
 use std::process::Command;
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::{Receiver, channel};
 use std::thread;
 
 use serde::Deserialize;
@@ -124,9 +124,7 @@ pub fn spawn_vultr_fetch(api_key: String) -> Receiver<VultrResult> {
                 .arg(&url)
                 .output()
             {
-                Ok(o) if o.status.success() => {
-                    Ok(String::from_utf8_lossy(&o.stdout).into_owned())
-                }
+                Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).into_owned()),
                 Ok(o) => Err(format!(
                     "vultr {url} exit {}: {}",
                     o.status.code().unwrap_or(-1),
@@ -134,7 +132,10 @@ pub fn spawn_vultr_fetch(api_key: String) -> Receiver<VultrResult> {
                 )),
                 Err(e) => Err(format!("vultr curl spawn failed: {e}")),
             };
-            let _ = tx.send(VultrResult { slot, output: result });
+            let _ = tx.send(VultrResult {
+                slot,
+                output: result,
+            });
         });
     }
     rx
@@ -204,7 +205,10 @@ pub fn spawn_vultr_action(
 ) -> Receiver<ActionResult> {
     let (tx, rx) = channel();
     thread::spawn(move || {
-        let url = format!("https://api.vultr.com{}", action.endpoint_path(&instance_id));
+        let url = format!(
+            "https://api.vultr.com{}",
+            action.endpoint_path(&instance_id)
+        );
         let auth = format!("Authorization: Bearer {api_key}");
         let mut cmd = Command::new("curl");
         cmd.args(["-sS", "-m", "30", "-X", "POST", "-H"])
@@ -215,9 +219,7 @@ pub fn spawn_vultr_action(
         }
         cmd.arg(&url);
         let outcome = match cmd.output() {
-            Ok(o) if o.status.success() => {
-                Ok(String::from_utf8_lossy(&o.stdout).into_owned())
-            }
+            Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).into_owned()),
             Ok(o) => Err(format!(
                 "vultr action exit {}: {}",
                 o.status.code().unwrap_or(-1),
@@ -237,15 +239,14 @@ pub fn spawn_vultr_action(
 /// Parse the `instances` array out of `GET /v2/instances`. Returns a
 /// human-readable error on malformed JSON.
 pub fn parse_instances(json: &str) -> Result<Vec<Instance>, String> {
-    let resp: InstancesResponse = serde_json::from_str(json)
-        .map_err(|e| format!("instances json: {e}"))?;
+    let resp: InstancesResponse =
+        serde_json::from_str(json).map_err(|e| format!("instances json: {e}"))?;
     Ok(resp.instances)
 }
 
 /// Parse the `plans` array out of `GET /v2/plans`.
 pub fn parse_plans(json: &str) -> Result<Vec<Plan>, String> {
-    let resp: PlansResponse =
-        serde_json::from_str(json).map_err(|e| format!("plans json: {e}"))?;
+    let resp: PlansResponse = serde_json::from_str(json).map_err(|e| format!("plans json: {e}"))?;
     Ok(resp.plans)
 }
 
@@ -347,9 +348,18 @@ mod tests {
 
     #[test]
     fn action_endpoint_paths_are_correct() {
-        assert_eq!(ActionKind::Reboot.endpoint_path("abc-1"), "/v2/instances/abc-1/reboot");
-        assert_eq!(ActionKind::Halt.endpoint_path("abc-1"), "/v2/instances/abc-1/halt");
-        assert_eq!(ActionKind::Start.endpoint_path("abc-1"), "/v2/instances/abc-1/start");
+        assert_eq!(
+            ActionKind::Reboot.endpoint_path("abc-1"),
+            "/v2/instances/abc-1/reboot"
+        );
+        assert_eq!(
+            ActionKind::Halt.endpoint_path("abc-1"),
+            "/v2/instances/abc-1/halt"
+        );
+        assert_eq!(
+            ActionKind::Start.endpoint_path("abc-1"),
+            "/v2/instances/abc-1/start"
+        );
         assert_eq!(ActionKind::Snapshot.endpoint_path("abc-1"), "/v2/snapshots");
     }
 

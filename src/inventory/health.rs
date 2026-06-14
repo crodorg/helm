@@ -11,7 +11,7 @@
 //! degrade gracefully into "unknown" cells rather than crashing the pane.
 
 use std::process::Command;
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::{Receiver, channel};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -100,12 +100,7 @@ pub fn parse_curl_w(s: &str) -> Option<(u16, u32)> {
 /// on Howard Hinnant's `days_from_civil` algorithm. Saturates implausible
 /// inputs by returning None.
 fn civil_to_unix(y: i32, m: u32, d: u32, hh: u32, mm: u32, ss: u32) -> Option<i64> {
-    if !(1..=12).contains(&m)
-        || !(1..=31).contains(&d)
-        || hh > 23
-        || mm > 59
-        || ss > 59
-    {
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) || hh > 23 || mm > 59 || ss > 59 {
         return None;
     }
     let y = if m <= 2 { y - 1 } else { y };
@@ -227,18 +222,15 @@ mod tests {
 
     #[test]
     fn parses_openssl_enddate_typical() {
-        let unix =
-            parse_openssl_enddate("notAfter=Jul 15 12:34:56 2026 GMT").expect("parses");
+        let unix = parse_openssl_enddate("notAfter=Jul 15 12:34:56 2026 GMT").expect("parses");
         // 2026-07-15 12:34:56 UTC
         assert_eq!(unix, 1_784_118_896);
     }
 
     #[test]
     fn parses_openssl_enddate_with_whitespace_padding() {
-        let unix = parse_openssl_enddate(
-            "  notAfter=Jan 01 00:00:00 2030 GMT  \n",
-        )
-        .expect("parses");
+        let unix =
+            parse_openssl_enddate("  notAfter=Jan 01 00:00:00 2030 GMT  \n").expect("parses");
         // 2030-01-01 00:00:00 UTC
         assert_eq!(unix, 1_893_456_000);
     }

@@ -21,10 +21,10 @@ pub struct SshHost {
 /// path to compare against `ssh-add -l` output, which prints the agent-side
 /// resolved path, so this is good enough in practice.
 pub fn expand_tilde(p: &str) -> PathBuf {
-    if let Some(rest) = p.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(rest);
-        }
+    if let Some(rest) = p.strip_prefix("~/")
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        return PathBuf::from(home).join(rest);
     }
     PathBuf::from(p)
 }
@@ -93,11 +93,11 @@ pub fn parse(raw: &str) -> Vec<SshHost> {
                 }
             }
             "port" => {
-                if let Some(v) = tokens.next() {
-                    if let Ok(p) = v.parse::<u16>() {
-                        for h in current.iter_mut() {
-                            h.port = Some(p);
-                        }
+                if let Some(v) = tokens.next()
+                    && let Ok(p) = v.parse::<u16>()
+                {
+                    for h in current.iter_mut() {
+                        h.port = Some(p);
                     }
                 }
             }

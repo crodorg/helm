@@ -18,7 +18,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 const SCHEMA_VERSION: i64 = 1;
 
@@ -109,8 +109,8 @@ impl HistoryStore {
 
     /// Open at the XDG default location: `$XDG_DATA_HOME/helm/state.db`.
     pub fn open_default() -> Result<Self> {
-        let path = default_path()
-            .context("XDG data dir unavailable — set $XDG_DATA_HOME or $HOME")?;
+        let path =
+            default_path().context("XDG data dir unavailable — set $XDG_DATA_HOME or $HOME")?;
         Self::open(&path)
     }
 
@@ -168,7 +168,14 @@ impl HistoryStore {
         tx.execute(
             "INSERT INTO runs(source, alias, cmd, started_at, exit, duration_ms)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![source.as_str(), alias, cmd, started_at_unix, exit, duration_ms],
+            params![
+                source.as_str(),
+                alias,
+                cmd,
+                started_at_unix,
+                exit,
+                duration_ms
+            ],
         )?;
         let run_id = tx.last_insert_rowid();
         {
@@ -219,9 +226,9 @@ impl HistoryStore {
 
     /// All transcript lines for one run, in insertion order.
     pub fn lines_for(&self, run_id: i64) -> Result<Vec<LineRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT kind, line FROM run_lines WHERE run_id = ?1 ORDER BY seq ASC",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT kind, line FROM run_lines WHERE run_id = ?1 ORDER BY seq ASC")?;
         let rows = stmt.query_map(params![run_id], |row| {
             let kind_str: String = row.get(0)?;
             Ok(LineRecord {
@@ -251,8 +258,7 @@ impl HistoryStore {
 
 /// XDG-default path for the history DB.
 pub fn default_path() -> Option<PathBuf> {
-    directories::ProjectDirs::from("", "", "helm")
-        .map(|d| d.data_dir().join("state.db"))
+    directories::ProjectDirs::from("", "", "helm").map(|d| d.data_dir().join("state.db"))
 }
 
 #[cfg(test)]
@@ -269,9 +275,18 @@ mod tests {
 
     fn sample_lines() -> Vec<LineRecord> {
         vec![
-            LineRecord { kind: LineKind::System, line: "$ ssh vps1 'uptime'".into() },
-            LineRecord { kind: LineKind::Out, line: " 12:34:56 up 5 days".into() },
-            LineRecord { kind: LineKind::System, line: "exit 0".into() },
+            LineRecord {
+                kind: LineKind::System,
+                line: "$ ssh vps1 'uptime'".into(),
+            },
+            LineRecord {
+                kind: LineKind::Out,
+                line: " 12:34:56 up 5 days".into(),
+            },
+            LineRecord {
+                kind: LineKind::System,
+                line: "exit 0".into(),
+            },
         ]
     }
 
@@ -358,7 +373,15 @@ mod tests {
         let (_d, mut store) = fresh();
         for t in [500, 100, 300, 200, 400] {
             store
-                .insert_run(RunSource::Agent, "h", &format!("c{t}"), t, Some(0), None, &[])
+                .insert_run(
+                    RunSource::Agent,
+                    "h",
+                    &format!("c{t}"),
+                    t,
+                    Some(0),
+                    None,
+                    &[],
+                )
                 .unwrap();
         }
         let recent = store.recent_runs(None, 10).unwrap();
@@ -383,7 +406,15 @@ mod tests {
         let (_d, mut store) = fresh();
         for t in 0..10 {
             store
-                .insert_run(RunSource::Agent, "h", "c", t, Some(0), None, &sample_lines())
+                .insert_run(
+                    RunSource::Agent,
+                    "h",
+                    "c",
+                    t,
+                    Some(0),
+                    None,
+                    &sample_lines(),
+                )
                 .unwrap();
         }
         let removed = store.prune_to(3).unwrap();

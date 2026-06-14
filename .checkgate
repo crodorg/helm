@@ -1,0 +1,3 @@
+Opt-in marker for the global git pre-commit / pre-push gate (~/.config/git/hooks).
+Its presence tells the hooks to run `make check-fast` (commit) and `make check-cov`
+(push) in this repo. Remove it to disable the gate here. See Makefile + decisions.md.

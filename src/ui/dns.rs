@@ -54,7 +54,9 @@ fn draw_header(f: &mut Frame, area: Rect) {
 fn header_cell(s: &str) -> Span<'static> {
     Span::styled(
         s.to_string(),
-        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD),
     )
 }
 
@@ -68,7 +70,11 @@ fn draw_body(f: &mut Frame, area: Rect, s: &DnsState) {
     let viewport = area.height as usize;
     let start = s.scroll.render_start(total, viewport);
     let end = (start + viewport).min(total);
-    let visible: Vec<ListItem> = all_items.into_iter().skip(start).take(end - start).collect();
+    let visible: Vec<ListItem> = all_items
+        .into_iter()
+        .skip(start)
+        .take(end - start)
+        .collect();
     f.render_widget(List::new(visible), area);
 }
 
@@ -108,7 +114,9 @@ fn rows_for<'a>(name: &str, row: Option<&DnsCheck>) -> Vec<ListItem<'a>> {
         Span::raw("  "),
         Span::styled(
             format!("{:<8}", verdict_text),
-            Style::default().fg(verdict_color).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(verdict_color)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
         Span::styled(

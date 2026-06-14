@@ -72,8 +72,10 @@ udp          0      0  *.53                   *.*
 udp          0      0  127.0.0.1.514          *.*
 ";
         let sockets = parse(raw);
-        let descriptors: Vec<String> =
-            sockets.iter().map(|s| format!("{}/{}", s.proto, s.local)).collect();
+        let descriptors: Vec<String> = sockets
+            .iter()
+            .map(|s| format!("{}/{}", s.proto, s.local))
+            .collect();
         // ESTABLISHED tcp is filtered; five listening sockets remain.
         assert_eq!(descriptors.len(), 5);
         assert!(descriptors.contains(&"tcp/*.22".to_string()));

@@ -10,13 +10,11 @@
 //! via `inventory::services::parse_rcctl` once all three slots arrive.
 
 use std::process::Command;
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::{Receiver, channel};
 use std::thread;
 
 use crate::config::OsFamily;
-use crate::inventory::services::{
-    parse_launchctl, parse_rcctl, parse_systemctl, Service,
-};
+use crate::inventory::services::{Service, parse_launchctl, parse_rcctl, parse_systemctl};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Slot {
@@ -34,7 +32,6 @@ impl Slot {
         }
     }
 }
-
 
 /// Final, OS-normalized result a Services pane consumes — one parsed
 /// `Vec<Service>` regardless of which init system produced it.
@@ -83,9 +80,7 @@ fn collect_rcctl(alias: &str) -> Result<Vec<Service>, String> {
                 .arg(format!("doas -n rcctl ls {sub}"))
                 .output()
             {
-                Ok(o) if o.status.success() => {
-                    Ok(String::from_utf8_lossy(&o.stdout).into_owned())
-                }
+                Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).into_owned()),
                 Ok(o) => Err(format!(
                     "doas -n rcctl ls {sub} exit {}: {}",
                     o.status.code().unwrap_or(-1),
@@ -165,9 +160,7 @@ pub fn spawn_processes_and_ports(alias: &str) -> Receiver<InvResult> {
         let tx = tx.clone();
         thread::spawn(move || {
             let result = match Command::new("ssh").arg(&alias).arg(&cmd).output() {
-                Ok(o) if o.status.success() => {
-                    Ok(String::from_utf8_lossy(&o.stdout).into_owned())
-                }
+                Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).into_owned()),
                 Ok(o) => Err(format!(
                     "{cmd} exit {}: {}",
                     o.status.code().unwrap_or(-1),

@@ -17,7 +17,9 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
         .unwrap_or(0) as u16;
     // 6 = 2 border + 3 platform rows + 1 spacer; +1 per Connect line.
     // Cap stripe block at 2/3 of pane so Mercury always has room.
-    let stripe_h = (6 + connect_rows).min(area.height.saturating_mul(2) / 3).max(6);
+    let stripe_h = (6 + connect_rows)
+        .min(area.height.saturating_mul(2) / 3)
+        .max(6);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -135,8 +137,16 @@ fn draw_stripe(f: &mut Frame, area: Rect, app: &App) {
 fn stripe_lines(s: &StripeSnapshot) -> Vec<Line<'static>> {
     let cur = s.currency.to_uppercase();
     vec![
-        kv("available (platform)", &format_amount(s.available_cents, &cur), Color::Green),
-        kv("pending   (platform)", &format_amount(s.pending_cents, &cur), Color::Yellow),
+        kv(
+            "available (platform)",
+            &format_amount(s.available_cents, &cur),
+            Color::Green,
+        ),
+        kv(
+            "pending   (platform)",
+            &format_amount(s.pending_cents, &cur),
+            Color::Yellow,
+        ),
         kv(
             "total     (platform)",
             &format_amount(s.available_cents + s.pending_cents, &cur),
@@ -198,7 +208,11 @@ fn draw_mercury(f: &mut Frame, area: Rect, app: &App) {
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
         .split(inner);
 
     draw_mercury_header(f, chunks[0]);
@@ -246,19 +260,25 @@ fn draw_mercury_total(f: &mut Frame, area: Rect, accounts: &[&MercuryAccount]) {
     let line = Line::from(vec![
         Span::styled(
             format!("{:<24}", "TOTAL"),
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
         Span::raw(format!("{:<10}", "")),
         Span::raw("  "),
         Span::styled(
             format!("{:>14}", format_decimal(current)),
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
         Span::styled(
             format!("{:>14}", format_decimal(avail)),
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
         Span::raw(format!("{:<4}", ccy)),
@@ -292,13 +312,12 @@ fn account_row<'a>(a: &MercuryAccount) -> ListItem<'a> {
 
 fn kv(label: &str, value: &str, value_color: Color) -> Line<'static> {
     Line::from(vec![
-        Span::styled(
-            format!("  {label}  "),
-            Style::default().fg(Color::DarkGray),
-        ),
+        Span::styled(format!("  {label}  "), Style::default().fg(Color::DarkGray)),
         Span::styled(
             value.to_string(),
-            Style::default().fg(value_color).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(value_color)
+                .add_modifier(Modifier::BOLD),
         ),
     ])
 }

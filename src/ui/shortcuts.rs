@@ -9,13 +9,14 @@ use ratatui::{
 use crate::app::App;
 
 pub fn draw(f: &mut Frame, area: Rect, app: &App) {
-    let host_name = app
-        .selected_host()
-        .map(|h| h.name.as_str())
-        .unwrap_or("?");
+    let host_name = app.selected_host().map(|h| h.name.as_str()).unwrap_or("?");
 
     let shortcuts = app.applicable_shortcuts();
-    let modal = centered_rect(70, (shortcuts.len() as u16).saturating_add(6).min(area.height), area);
+    let modal = centered_rect(
+        70,
+        (shortcuts.len() as u16).saturating_add(6).min(area.height),
+        area,
+    );
     f.render_widget(Clear, modal);
 
     let block = Block::default()
@@ -53,10 +54,7 @@ pub fn draw(f: &mut Frame, area: Rect, app: &App) {
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("  "),
-                Span::styled(
-                    truncate(&s.cmd, 60),
-                    Style::default().fg(Color::DarkGray),
-                ),
+                Span::styled(truncate(&s.cmd, 60), Style::default().fg(Color::DarkGray)),
             ]));
         }
     }

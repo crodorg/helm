@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::sync::mpsc::Receiver;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use crate::config::{builtin_logs, Config, Host, Log};
+use crate::config::{Config, Host, Log, builtin_logs};
 use crate::engine::Engine;
 use crate::history::{HistoryStore, LineKind, LineRecord, RunSource};
 use crate::inventory::health::{self, Health, HealthResult};
@@ -10,12 +10,10 @@ use crate::inventory::ports::{self as ports_inv, ListeningSocket};
 use crate::inventory::processes::{self as procs_inv, Process};
 use crate::inventory::services::Service;
 use crate::money::{self, MoneyCache, MoneyResult, MoneySlot};
-use crate::vultr::{self, ActionKind, ActionResult, VultrCache, VultrResult, VultrSlot};
-use crate::ssh::collect::{
-    spawn_processes_and_ports, InvResult, InvSlot,
-};
+use crate::ssh::collect::{InvResult, InvSlot, spawn_processes_and_ports};
 use crate::ssh::{RunEvent, RunHandle};
 use crate::tmux::shell_quote;
+use crate::vultr::{self, ActionKind, ActionResult, VultrCache, VultrResult, VultrSlot};
 
 pub const PAGE_STEP: usize = 10;
 
@@ -231,16 +229,27 @@ fn now_unix() -> i64 {
 
 fn output_line_to_record(l: &OutputLine) -> LineRecord {
     match l {
-        OutputLine::Out(s) => LineRecord { kind: LineKind::Out, line: s.clone() },
-        OutputLine::Err(s) => LineRecord { kind: LineKind::Err, line: s.clone() },
-        OutputLine::Partial(s) => LineRecord { kind: LineKind::Out, line: s.clone() },
-        OutputLine::System(s) => LineRecord { kind: LineKind::System, line: s.clone() },
+        OutputLine::Out(s) => LineRecord {
+            kind: LineKind::Out,
+            line: s.clone(),
+        },
+        OutputLine::Err(s) => LineRecord {
+            kind: LineKind::Err,
+            line: s.clone(),
+        },
+        OutputLine::Partial(s) => LineRecord {
+            kind: LineKind::Out,
+            line: s.clone(),
+        },
+        OutputLine::System(s) => LineRecord {
+            kind: LineKind::System,
+            line: s.clone(),
+        },
     }
 }
 
 fn spawn_health_state(businesses: &[crate::config::Business]) -> HealthState {
-    let business_names: Vec<String> =
-        businesses.iter().map(|b| b.name.clone()).collect();
+    let business_names: Vec<String> = businesses.iter().map(|b| b.name.clone()).collect();
     let rows: Vec<Option<Health>> = vec![None; businesses.len()];
     let rx = health::spawn_health(businesses);
     HealthState {
@@ -256,8 +265,7 @@ fn spawn_health_state(businesses: &[crate::config::Business]) -> HealthState {
 /// only acts on values that parse as `IpAddr`, so DNS-name hostnames are
 /// passed through and naturally land at `Unknown`.
 fn spawn_dns_state(config: &crate::config::Config) -> DnsState {
-    let business_names: Vec<String> =
-        config.businesses.iter().map(|b| b.name.clone()).collect();
+    let business_names: Vec<String> = config.businesses.iter().map(|b| b.name.clone()).collect();
     let expected_ips: Vec<Option<String>> = config
         .businesses
         .iter()
@@ -899,21 +907,21 @@ impl App {
 
     /// Move the selection cursor in the sessions pane.
     pub fn shell_sessions_select_next(&mut self) {
-        if let Some(s) = self.shell_sessions.as_mut() {
-            if !s.sessions.is_empty() {
-                s.selected = (s.selected + 1) % s.sessions.len();
-            }
+        if let Some(s) = self.shell_sessions.as_mut()
+            && !s.sessions.is_empty()
+        {
+            s.selected = (s.selected + 1) % s.sessions.len();
         }
     }
 
     pub fn shell_sessions_select_prev(&mut self) {
-        if let Some(s) = self.shell_sessions.as_mut() {
-            if !s.sessions.is_empty() {
-                if s.selected == 0 {
-                    s.selected = s.sessions.len() - 1;
-                } else {
-                    s.selected -= 1;
-                }
+        if let Some(s) = self.shell_sessions.as_mut()
+            && !s.sessions.is_empty()
+        {
+            if s.selected == 0 {
+                s.selected = s.sessions.len() - 1;
+            } else {
+                s.selected -= 1;
             }
         }
     }
@@ -1187,18 +1195,9 @@ impl App {
         }
         self.vultr_toast = Some(VultrToast {
             kind: VultrToastKind::Firing,
-            message: format!(
-                "{}: firing on {}…",
-                confirm.action.label(),
-                confirm.label
-            ),
+            message: format!("{}: firing on {}…", confirm.action.label(), confirm.label),
         });
-        let rx = vultr::spawn_vultr_action(
-            key,
-            confirm.action,
-            confirm.instance_id,
-            confirm.label,
-        );
+        let rx = vultr::spawn_vultr_action(key, confirm.action, confirm.instance_id, confirm.label);
         self.vultr_action_rx = Some(rx);
     }
 
@@ -1426,16 +1425,16 @@ impl App {
     pub fn ingest_log_tail_events(&mut self) {
         let mut events = Vec::new();
         let mut disconnected = false;
-        if let Some(state) = self.log_tail.as_ref() {
-            if let Some(handle) = state.handle.as_ref() {
-                loop {
-                    match handle.rx.try_recv() {
-                        Ok(ev) => events.push(ev),
-                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                            disconnected = true;
-                            break;
-                        }
+        if let Some(state) = self.log_tail.as_ref()
+            && let Some(handle) = state.handle.as_ref()
+        {
+            loop {
+                match handle.rx.try_recv() {
+                    Ok(ev) => events.push(ev),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        disconnected = true;
+                        break;
                     }
                 }
             }
@@ -1474,9 +1473,7 @@ impl App {
         }
         if disconnected && state.exit.is_none() {
             state.exit = Some(-1);
-            state
-                .lines
-                .push(LogLine::System("(channel closed)".into()));
+            state.lines.push(LogLine::System("(channel closed)".into()));
         }
     }
 
@@ -1585,10 +1582,10 @@ impl App {
     }
 
     pub fn history_next(&mut self) {
-        if let Some(s) = self.history_pane.as_mut() {
-            if !s.entries.is_empty() {
-                s.selected = (s.selected + 1).min(s.entries.len() - 1);
-            }
+        if let Some(s) = self.history_pane.as_mut()
+            && !s.entries.is_empty()
+        {
+            s.selected = (s.selected + 1).min(s.entries.len() - 1);
         }
     }
 
@@ -1670,16 +1667,16 @@ impl App {
                 .path
                 .clone()
                 .or_else(crate::ssh::sshconfig::default_config_path);
-            if let Some(p) = path {
-                if p.exists() {
-                    match crate::ssh::sshconfig::load_from(&p) {
-                        Ok(hs) => new_cfg.merge_ssh_hosts(hs),
-                        Err(e) => {
-                            tracing::warn!(
-                                "config reload: ssh_config {} parse failed: {e}",
-                                p.display()
-                            );
-                        }
+            if let Some(p) = path
+                && p.exists()
+            {
+                match crate::ssh::sshconfig::load_from(&p) {
+                    Ok(hs) => new_cfg.merge_ssh_hosts(hs),
+                    Err(e) => {
+                        tracing::warn!(
+                            "config reload: ssh_config {} parse failed: {e}",
+                            p.display()
+                        );
                     }
                 }
             }
@@ -2038,9 +2035,15 @@ mod tests {
         ]);
         assert_eq!(app.money_filter, None);
         app.cycle_money_filter();
-        assert_eq!(app.money_filter_business().map(|b| b.name.as_str()), Some("alpha"));
+        assert_eq!(
+            app.money_filter_business().map(|b| b.name.as_str()),
+            Some("alpha")
+        );
         app.cycle_money_filter();
-        assert_eq!(app.money_filter_business().map(|b| b.name.as_str()), Some("beta"));
+        assert_eq!(
+            app.money_filter_business().map(|b| b.name.as_str()),
+            Some("beta")
+        );
         app.cycle_money_filter();
         assert_eq!(app.money_filter, None);
     }
