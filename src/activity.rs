@@ -74,8 +74,10 @@ pub struct ActivityRecord {
     pub exit: Option<i32>,
 }
 
-/// Returns the resolved log path, creating parent directories as needed.
-pub fn log_path() -> Option<PathBuf> {
+/// Resolved helm state directory (`$XDG_STATE_HOME/helm` or the platform
+/// fallback), created if missing. Shared by the activity log and the mosh
+/// detection cache.
+pub fn state_dir() -> Option<PathBuf> {
     let base = if let Some(v) = std::env::var_os("XDG_STATE_HOME") {
         PathBuf::from(v)
     } else if let Some(home) = std::env::var_os("HOME") {
@@ -98,10 +100,16 @@ pub fn log_path() -> Option<PathBuf> {
     };
     let dir = base.join("helm");
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        eprintln!("helm: activity log dir {}: {}", dir.display(), e);
+        eprintln!("helm: state dir {}: {}", dir.display(), e);
         return None;
     }
-    Some(dir.join("activity.jsonl"))
+    Some(dir)
+}
+
+/// Returns the resolved activity-log path, creating parent directories as
+/// needed.
+pub fn log_path() -> Option<PathBuf> {
+    state_dir().map(|d| d.join("activity.jsonl"))
 }
 
 /// Append a record. Best-effort: a failure here never blocks the caller.

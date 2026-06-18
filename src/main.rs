@@ -1,5 +1,6 @@
 mod activity;
 mod app;
+mod cli;
 mod config;
 mod engine;
 mod help;
@@ -7,6 +8,7 @@ mod history;
 mod inventory;
 mod ipc;
 mod money;
+mod mosh;
 mod postmark;
 mod ssh;
 mod tmux;
@@ -50,11 +52,17 @@ fn main() -> std::process::ExitCode {
                 return std::process::ExitCode::SUCCESS;
             }
             other if !other.starts_with('-') => {
-                // Bare `helm <target>` is sugar for `helm shell open <target>`:
-                // attach a persistent shell to any ssh alias / host / IP. The
-                // whole tail (argv[1..]) is forwarded so `<alias>:<label>`
-                // works; an unknown host surfaces ssh's own error, which is
-                // the right feedback for a typo'd alias.
+                // Known read verb (`ls`, `svc`, `health`, …)? Handle and exit.
+                // These are reserved words — an ssh alias colliding with one
+                // is shadowed (Phase 3 makes attach explicit via `helm open`).
+                if let Some(exit) = cli::dispatch(other, &argv[2..]) {
+                    return exit;
+                }
+                // Otherwise bare `helm <target>` is sugar for `helm shell open
+                // <target>`: attach a persistent shell to any ssh alias / host
+                // / IP. The whole tail (argv[1..]) is forwarded so
+                // `<alias>:<label>` works; an unknown host surfaces ssh's own
+                // error, which is the right feedback for a typo'd alias.
                 let mut shell_args = vec!["open".to_string()];
                 shell_args.extend(argv[1..].iter().cloned());
                 return run_shell_cli(&shell_args);
@@ -85,6 +93,20 @@ usage:
                                 socket
   helm shell <subcommand>       drive a persistent tmux-backed shell session
                                 per VPS (see `helm shell help`)
+
+  read commands (add --json for machine output):
+  helm ls                       list configured + ssh_config hosts
+  helm show <host>              one host's detail + linked businesses
+  helm svc <host>               service inventory (rcctl/systemctl/launchctl)
+  helm ps <host> [-n N]         top processes by CPU
+  helm ports <host>             listening sockets
+  helm health                   per-business HTTPS reachability + TLS expiry
+  helm dns                      per-business A/AAAA/MX/CAA vs expected IP
+  helm vultr                    Vultr instances + monthly cost
+  helm money                    Stripe + Mercury balances
+  helm logs <host> [key] [-f]   list or tail a host's logs
+  helm history [-n N]           recent command history
+  helm activity [-n N]          recent agent audit log
   helm auth [--load]            verify ssh-agent has every key helm hosts
                                 depend on; exit 0/non-zero (see `helm auth help`)
   helm daemon [start|stop|status]
@@ -271,13 +293,26 @@ fn shell_open(args: &[String]) -> std::process::ExitCode {
             "{} new-session -A -s {session}",
             tmux::tmux_prefix()
         ));
-        std::process::Command::new("ssh")
-            .arg("-t")
-            .arg(&alias)
-            .arg(&remote)
-            .exec()
+        // Pick mosh vs ssh BEFORE exec — exec replaces this process, so a
+        // post-failure fallback is impossible. mosh parses no shell syntax
+        // itself, so the script rides in `sh -c` after `--`; mosh always
+        // allocates a PTY, hence no `-t`.
+        match crate::mosh::decide(&alias) {
+            crate::mosh::Transport::Mosh => std::process::Command::new("mosh")
+                .arg(&alias)
+                .arg("--")
+                .arg("sh")
+                .arg("-c")
+                .arg(&remote)
+                .exec(),
+            crate::mosh::Transport::Ssh => std::process::Command::new("ssh")
+                .arg("-t")
+                .arg(&alias)
+                .arg(&remote)
+                .exec(),
+        }
     };
-    eprintln!("helm: exec tmux attach failed: {err}");
+    eprintln!("helm: exec attach failed: {err}");
     std::process::ExitCode::FAILURE
 }
 

@@ -47,6 +47,11 @@ provider = "vultr"
 os = "openbsd"
 hostname = "web.example.org"
 user = "admin"
+mosh = "auto"                 # interactive attach transport: auto (default) |
+                             # on | off — also accepts true/false. `auto`
+                             # detects remote mosh-server (cached 7d) and uses
+                             # it, else ssh. Only `helm <alias>` / `shell open`
+                             # use it; send/read/exec stay on ssh.
 notes = "OpenBSD application host"
 
 # A systemd-based Linux VPS (Debian, Ubuntu, RHEL, Arch, etc.). The

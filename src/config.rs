@@ -159,6 +159,14 @@ pub struct Host {
     pub user: Option<String>,
     #[serde(default)]
     pub notes: String,
+    /// Transport for interactive attach (`helm <alias>` / `helm shell open`).
+    /// `auto` (default) auto-detects `mosh-server` on the remote and uses
+    /// mosh when present, else ssh; `on` forces mosh; `off` always ssh.
+    /// Accepts a string (`"auto"|"on"|"off"`) or a bool (`true`→on,
+    /// `false`→off). Only the interactive attach uses it — send/read/exec
+    /// stay on plain ssh (mosh has no capture channel).
+    #[serde(default)]
+    pub mosh: MoshPref,
 }
 
 impl Host {
@@ -212,6 +220,59 @@ impl Provider {
             Provider::Vultr => "VULTR",
             Provider::Buyvm => "BUYVM",
             Provider::Unknown => "  ?  ",
+        }
+    }
+}
+
+/// Per-host transport preference for the interactive attach path.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MoshPref {
+    /// Auto-detect: use mosh when both the local client and the remote
+    /// `mosh-server` are present; otherwise ssh.
+    #[default]
+    Auto,
+    /// Always attempt mosh.
+    On,
+    /// Always use ssh.
+    Off,
+}
+
+impl MoshPref {
+    pub fn label(self) -> &'static str {
+        match self {
+            MoshPref::Auto => "auto",
+            MoshPref::On => "on",
+            MoshPref::Off => "off",
+        }
+    }
+}
+
+// Accept either a TOML string (`"auto"`/`"on"`/`"off"`, plus friendly
+// synonyms) or a bool (`true`→on, `false`→off), so `mosh = true` and
+// `mosh = "auto"` both parse.
+impl<'de> Deserialize<'de> for MoshPref {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error;
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Bool(bool),
+            Str(String),
+        }
+        match Raw::deserialize(deserializer)? {
+            Raw::Bool(true) => Ok(MoshPref::On),
+            Raw::Bool(false) => Ok(MoshPref::Off),
+            Raw::Str(s) => match s.to_ascii_lowercase().as_str() {
+                "auto" => Ok(MoshPref::Auto),
+                "on" | "true" | "always" | "yes" => Ok(MoshPref::On),
+                "off" | "false" | "never" | "no" => Ok(MoshPref::Off),
+                other => Err(D::Error::custom(format!(
+                    "invalid mosh value `{other}` (use auto/on/off or true/false)"
+                ))),
+            },
         }
     }
 }
@@ -406,6 +467,7 @@ impl Config {
                     hostname: sh.hostname,
                     user: sh.user,
                     notes: String::new(),
+                    mosh: MoshPref::default(),
                 });
             }
         }
