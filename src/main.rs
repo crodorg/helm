@@ -1,4 +1,5 @@
 mod activity;
+mod args;
 mod cli;
 mod config;
 mod history;
@@ -16,82 +17,36 @@ use crate::history::{HistoryStore, LineKind, LineRecord, RunSource};
 use crate::ssh::{RunEvent, RunHandle, spawn_remote};
 
 fn main() -> std::process::ExitCode {
-    let argv: Vec<String> = std::env::args().collect();
-    let Some(sub) = argv.get(1) else {
-        // No subcommand — print usage and exit. (The TUI used to launch
-        // here; helm is CLI-only now.)
-        print_help();
+    use clap::Parser;
+    // clap owns argv → verb routing, --help/--version, and usage errors;
+    // each verb keeps its own tested tail parser (see src/args.rs).
+    let cli = args::Cli::parse();
+    let Some(cmd) = cli.cmd else {
+        // Bare `helm` → print the full (clap-generated) help, exit 0.
+        let _ = <args::Cli as clap::CommandFactory>::command().print_long_help();
+        println!();
         return std::process::ExitCode::SUCCESS;
     };
-    match sub.as_str() {
-        "exec" => run_exec_cli(&argv[2..]),
-        "shell" => run_shell_cli(&argv[2..]),
-        "open" => {
-            // `helm open <target>` attaches a persistent shell to any ssh
-            // alias / host / IP — the explicit successor to the old bare
-            // `helm <target>` sugar. Forward the tail so `<alias>:<label>`
-            // works.
+    // Read + gated-mutation verbs delegate to the cli module, which keeps its
+    // own flag parsing (--json/-n/-f, --yes). clap only routed the verb.
+    if let Some((verb, tail)) = cmd.as_read_verb() {
+        return cli::dispatch(verb, tail).expect("clap routed a known verb");
+    }
+    // The remaining verbs carry an arbitrary tail (alias, command words,
+    // tmux subcommand) that must not be re-parsed; hand it through verbatim.
+    match cmd {
+        args::Cmd::Open { args } => {
+            // Explicit successor to the old bare `helm <target>` sugar. Forward
+            // the tail so `<alias>:<label>` and `-d` still work.
             let mut shell_args = vec!["open".to_string()];
-            shell_args.extend(argv[2..].iter().cloned());
+            shell_args.extend(args);
             run_shell_cli(&shell_args)
         }
-        "auth" => run_auth_cli(&argv[2..]),
-        "--help" | "-h" | "help" => {
-            print_help();
-            std::process::ExitCode::SUCCESS
-        }
-        other if !other.starts_with('-') => {
-            // Read verb (`ls`, `svc`, `health`, …)? Handle and exit. These
-            // are reserved words; an ssh alias colliding with one is
-            // shadowed — attach explicitly with `helm open <alias>`.
-            if let Some(exit) = cli::dispatch(other, &argv[2..]) {
-                return exit;
-            }
-            eprintln!("helm: unknown command `{other}` (see `helm help`)");
-            std::process::ExitCode::from(2)
-        }
-        other => {
-            eprintln!("helm: unknown flag `{other}` (see `helm help`)");
-            std::process::ExitCode::from(2)
-        }
+        args::Cmd::Exec { args } => run_exec_cli(&args),
+        args::Cmd::Shell { args } => run_shell_cli(&args),
+        args::Cmd::Auth { args } => run_auth_cli(&args),
+        _ => unreachable!("read/mutation verbs are handled above"),
     }
-}
-
-fn print_help() {
-    eprintln!(
-        "helm — fleet manager + remote command bridge
-
-usage:
-  helm open <target>            attach a persistent shell to any ssh alias,
-                                host, or IP (e.g. `helm open web`,
-                                `helm open web:deploy`)
-  helm exec <alias> <cmd...>    run a one-shot command on a host over ssh,
-                                streaming output (recorded to history)
-  helm shell <subcommand>       drive a persistent tmux-backed shell session
-                                per VPS (see `helm shell help`)
-
-  read commands (add --json for machine output):
-  helm ls                       list configured + ssh_config hosts
-  helm show <host>              one host's detail + linked businesses
-  helm svc <host>               service inventory (rcctl/systemctl/launchctl)
-  helm ps <host> [-n N]         top processes by CPU
-  helm ports <host>             listening sockets
-  helm health                   per-business HTTPS reachability + TLS expiry
-  helm dns                      per-business A/AAAA/MX/CAA vs expected IP
-  helm vultr                    Vultr instances + monthly cost
-  helm money                    Stripe + Mercury balances
-  helm logs <host> [key] [-f]   list or tail a host's logs
-  helm history [-n N]           recent command history
-  helm activity [-n N]          recent agent audit log
-
-  mutations (operator-only; refuse without --yes):
-  helm vultr reboot|halt|start|snapshot <id> --yes
-  helm run <key> <host> --yes   run a [[shortcuts]] command on a host
-
-  helm auth [--load]            verify ssh-agent has every key helm hosts
-                                depend on; exit 0/non-zero (see `helm auth help`)
-  helm help                     this help"
-    );
 }
 
 fn print_auth_help() {
