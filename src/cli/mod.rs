@@ -11,7 +11,6 @@
 //! `render_*` function that turns already-fetched data into a string. The
 //! pure half is unit-tested; the shell-out half stays small.
 
-mod checks;
 mod cloud;
 mod inventory;
 mod records;
@@ -34,10 +33,7 @@ pub fn dispatch(verb: &str, args: &[String]) -> Option<ExitCode> {
         "svc" | "services" => inventory::svc(args),
         "ps" => inventory::ps(args),
         "ports" => inventory::ports(args),
-        "health" => checks::health(args),
-        "dns" => checks::dns(args),
         "vultr" => cloud::vultr(args),
-        "money" => cloud::money(args),
         "run" => run::run(args),
         "history" => records::history(args),
         "activity" => records::activity(args),
@@ -294,10 +290,10 @@ fn render_show(h: &Host, linked: &[&Business]) -> String {
             out.push_str(&format!("  deploy  {}\n", b.deploy_cmd));
         }
         if b.stripe_account_id.is_some() {
-            out.push_str("  stripe  linked (helm money)\n");
+            out.push_str("  stripe  linked\n");
         }
         if b.mercury_account_id.is_some() {
-            out.push_str("  mercury linked (helm money)\n");
+            out.push_str("  mercury linked\n");
         }
     }
     out

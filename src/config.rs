@@ -129,12 +129,6 @@ pub struct Host {
     pub mosh: MoshPref,
 }
 
-impl Host {
-    pub fn display_hostname(&self) -> &str {
-        self.hostname.as_deref().unwrap_or("?")
-    }
-}
-
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Provider {

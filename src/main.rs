@@ -4,7 +4,6 @@ mod cli;
 mod config;
 mod history;
 mod inventory;
-mod money;
 mod mosh;
 mod ssh;
 mod tmux;

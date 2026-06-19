@@ -17,10 +17,10 @@ use clap::{Parser, Subcommand};
     version,
     about = "helm — fleet manager + remote command bridge",
     long_about = "helm — fleet manager + remote command bridge.\n\n\
-        Read verbs (ls, show, svc, ps, ports, health, dns, vultr, money, logs, \
-        history, activity) accept --json for machine output; stdout carries the \
-        payload, stderr the diagnostics. Mutations (vultr reboot|halt|start|\
-        snapshot, run) are operator-only and refuse to fire without --yes."
+        Read verbs (ls, show, svc, ps, ports, vultr, logs, history, activity) \
+        accept --json for machine output; stdout carries the payload, stderr \
+        the diagnostics. Mutations (vultr reboot|halt|start|snapshot, run) are \
+        operator-only and refuse to fire without --yes."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -83,23 +83,8 @@ pub enum Cmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Per-business HTTPS reachability + TLS expiry
-    Health {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
-    },
-    /// Per-business A/AAAA/MX/CAA vs expected IP
-    Dns {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
-    },
     /// Vultr instances + monthly cost (reboot|halt|start|snapshot <id> --yes)
     Vultr {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
-    },
-    /// Stripe + Mercury balances
-    Money {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -143,10 +128,7 @@ impl Cmd {
             Cmd::Svc { args } => ("svc", args),
             Cmd::Ps { args } => ("ps", args),
             Cmd::Ports { args } => ("ports", args),
-            Cmd::Health { args } => ("health", args),
-            Cmd::Dns { args } => ("dns", args),
             Cmd::Vultr { args } => ("vultr", args),
-            Cmd::Money { args } => ("money", args),
             Cmd::Logs { args } => ("logs", args),
             Cmd::History { args } => ("history", args),
             Cmd::Activity { args } => ("activity", args),

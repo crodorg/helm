@@ -1,13 +1,12 @@
-//! `helm vultr` + `helm money` — provider/finance overlays. Read-only here;
-//! Vultr lifecycle actions (reboot/halt/snapshot) are a separate, gated
-//! command added later. Both reuse the existing fetchers.
+//! `helm vultr` — Vultr provider overlay. Read-only listing here; the
+//! lifecycle actions (reboot/halt/start/snapshot) are gated behind `--yes`.
+//! Reuses the existing fetchers.
 
 use std::process::ExitCode;
 
 use serde_json::{Value, json};
 
 use super::{fail, parse_read_args, print_json, table, usage};
-use crate::money::{self, MercuryAccount, MoneyCache, MoneySlot, StripeSnapshot};
 use crate::vultr::{self, Instance, VultrCache, VultrSlot};
 
 // ── helm vultr ──────────────────────────────────────────────────────────
@@ -174,131 +173,6 @@ fn render_vultr(cache: &VultrCache) -> String {
     )
 }
 
-// ── helm money ──────────────────────────────────────────────────────────
-
-pub(super) fn money(args: &[String]) -> ExitCode {
-    let pa = match parse_read_args(args) {
-        Ok(p) => p,
-        Err(e) => return usage(&e),
-    };
-    let cfg = match super::merged_config() {
-        Ok(c) => c,
-        Err(e) => return fail(&format!("config: {e}")),
-    };
-    let connect: Vec<String> = cfg
-        .businesses
-        .iter()
-        .filter_map(|b| b.stripe_account_id.clone())
-        .collect();
-    let expected = 2 + connect.len(); // platform stripe + mercury + one per connect acct
-    let rx = money::spawn_money_fetch(&connect);
-    let mut cache = MoneyCache::default();
-    for _ in 0..expected {
-        match rx.recv() {
-            Ok(r) => apply(&mut cache, r.slot, r.output),
-            Err(e) => return fail(&format!("money channel: {e}")),
-        }
-    }
-    if pa.json {
-        print_json(&money_json(&cache));
-    } else {
-        print!("{}", render_money(&cache));
-    }
-    ExitCode::SUCCESS
-}
-
-fn apply(cache: &mut MoneyCache, slot: MoneySlot, output: Result<String, String>) {
-    match (slot, output) {
-        (MoneySlot::Stripe, Ok(body)) => match money::parse_stripe_balance(&body) {
-            Ok(s) => cache.stripe = Some(s),
-            Err(e) => cache.stripe_error = Some(e),
-        },
-        (MoneySlot::Stripe, Err(e)) => cache.stripe_error = Some(e),
-        (MoneySlot::StripeConnect(id), Ok(body)) => match money::parse_stripe_balance(&body) {
-            Ok(s) => {
-                cache.stripe_connect.insert(id, s);
-            }
-            Err(e) => {
-                cache.stripe_connect_errors.insert(id, e);
-            }
-        },
-        (MoneySlot::StripeConnect(id), Err(e)) => {
-            cache.stripe_connect_errors.insert(id, e);
-        }
-        (MoneySlot::Mercury, Ok(body)) => match money::parse_mercury_accounts(&body) {
-            Ok(a) => cache.mercury = a,
-            Err(e) => cache.mercury_error = Some(e),
-        },
-        (MoneySlot::Mercury, Err(e)) => cache.mercury_error = Some(e),
-    }
-}
-
-fn dollars(cents: i64, currency: &str) -> String {
-    format!("{:.2} {}", cents as f64 / 100.0, currency.to_uppercase())
-}
-
-fn stripe_json(s: &StripeSnapshot) -> Value {
-    json!({
-        "available": s.available_cents as f64 / 100.0,
-        "pending": s.pending_cents as f64 / 100.0,
-        "currency": s.currency,
-    })
-}
-
-fn mercury_json(a: &MercuryAccount) -> Value {
-    json!({
-        "id": a.id,
-        "name": a.name,
-        "kind": a.kind,
-        "available": a.available_balance,
-        "current": a.current_balance,
-        "currency": a.currency,
-    })
-}
-
-fn money_json(cache: &MoneyCache) -> Value {
-    json!({
-        "stripe": cache.stripe.as_ref().map(stripe_json),
-        "stripe_error": cache.stripe_error,
-        "mercury": cache.mercury.iter().map(mercury_json).collect::<Vec<_>>(),
-        "mercury_error": cache.mercury_error,
-    })
-}
-
-fn render_money(cache: &MoneyCache) -> String {
-    let mut out = String::new();
-    match (&cache.stripe, &cache.stripe_error) {
-        (Some(s), _) => out.push_str(&format!(
-            "stripe   available {}  pending {}\n",
-            dollars(s.available_cents, &s.currency),
-            dollars(s.pending_cents, &s.currency),
-        )),
-        (None, Some(e)) => out.push_str(&format!("stripe   error: {e}\n")),
-        (None, None) => out.push_str("stripe   (no data)\n"),
-    }
-    if let Some(e) = &cache.mercury_error {
-        out.push_str(&format!("mercury  error: {e}\n"));
-    }
-    if !cache.mercury.is_empty() {
-        let rows: Vec<Vec<String>> = cache
-            .mercury
-            .iter()
-            .map(|a| {
-                vec![
-                    a.name.clone(),
-                    a.kind.clone(),
-                    format!("{:.2} {}", a.available_balance, a.currency),
-                    format!("{:.2} {}", a.current_balance, a.currency),
-                ]
-            })
-            .collect();
-        out.push('\n');
-        out.push_str(&table(&["MERCURY", "KIND", "AVAILABLE", "CURRENT"], &rows));
-        out.push('\n');
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,44 +207,5 @@ mod tests {
         let out = render_vultr(&cache);
         assert!(out.contains("$6.00"));
         assert!(out.contains("monthly total: $26.00"));
-    }
-
-    #[test]
-    fn dollars_formats_cents() {
-        assert_eq!(dollars(12345, "usd"), "123.45 USD");
-        assert_eq!(dollars(0, "eur"), "0.00 EUR");
-    }
-
-    #[test]
-    fn money_render_shows_stripe_and_mercury() {
-        let mut cache = MoneyCache {
-            stripe: Some(StripeSnapshot {
-                available_cents: 12345,
-                pending_cents: 678,
-                currency: "usd".into(),
-            }),
-            ..Default::default()
-        };
-        cache.mercury.push(MercuryAccount {
-            id: "a".into(),
-            name: "Operating".into(),
-            kind: "checking".into(),
-            current_balance: 100.0,
-            available_balance: 90.0,
-            currency: "USD".into(),
-        });
-        let out = render_money(&cache);
-        assert!(out.contains("available 123.45 USD"));
-        assert!(out.contains("Operating"));
-        assert!(out.contains("90.00 USD"));
-    }
-
-    #[test]
-    fn money_render_surfaces_errors() {
-        let cache = MoneyCache {
-            stripe_error: Some("401 unauthorized".into()),
-            ..Default::default()
-        };
-        assert!(render_money(&cache).contains("error: 401 unauthorized"));
     }
 }

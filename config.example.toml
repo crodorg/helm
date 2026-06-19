@@ -39,8 +39,8 @@ mosh = "auto"                 # interactive attach transport: auto (default) |
                              # use it; send/read/exec stay on ssh.
 notes = "OpenBSD application host"
 
-# A systemd-based Linux VPS (Debian, Ubuntu, RHEL, Arch, etc.). The
-# Services pane shells out to `systemctl list-units --type=service --all`
+# A systemd-based Linux VPS (Debian, Ubuntu, RHEL, Arch, etc.). On these,
+# `helm svc` shells out to `systemctl list-units --type=service --all`
 # and parses unit state. `os = "linux"` covers any systemd distro;
 # non-systemd Linux (runit / OpenRC / s6) isn't recognized yet.
 [[hosts]]
@@ -64,16 +64,12 @@ user = "you"
 notes = "macOS workstation"
 
 # Businesses — "business" here is just helm's noun for *any named thing
-# with a domain*. Personal site, side project, brochureware, OSS
-# landing page, your blog — anything you want the health pane (`H`) to
-# probe and the Browse detail panel to show. The naming is historical
-# (helm grew up managing a few revenue-generating sites); nothing in
-# the code requires a business to make money. Skip stripe/mercury/
-# postmark fields if it doesn't.
-#
-# Each entry maps a domain to the host(s) it runs on; helm uses this
-# to render per-business overlays and (when the health flag is on)
-# probe HTTPS reachability + TLS NotAfter for `primary_domain`.
+# with a domain*. Personal site, side project, brochureware, OSS landing
+# page, your blog. The naming is historical (helm grew up managing a few
+# revenue-generating sites); nothing in the code requires a business to
+# make money. Each entry maps a domain to the host it runs on; `helm show
+# <host>` lists the businesses linked to that host. Skip the stripe/
+# mercury/postmark fields if you don't need them.
 
 [[businesses]]
 name = "example.org"
@@ -82,26 +78,16 @@ host = "web"
 repo_path = "/home/admin/sites/example"
 deploy_cmd = "doas rcctl restart httpd"
 notes = "Marketing site"
-# Optional money linkage. When set, the Browse detail panel pulls this
-# business's slice from the money cache and renders it inline under the
-# business bullet. Helm fires the money fetch eagerly on startup when any
-# business has either field populated.
-#   stripe_account_id  Stripe Connect connected-account id (acct_…). Per-
-#                      account balance fetch is a follow-up — for now the
-#                      panel just labels the business as Stripe-linked and
-#                      shows the fleet-wide available balance.
-#   mercury_account_id Mercury account id from `mercury-pp-cli accounts`.
-#                      The matching account's available + current balance
-#                      renders inline.
+# Optional account linkage — when set, `helm show <host>` flags the business
+# as Stripe- / Mercury-linked (an informational badge; helm reads no balances).
+#   stripe_account_id   Stripe Connect connected-account id (acct_…)
+#   mercury_account_id  Mercury account id
+#   postmark_server_token  surfaced as `postmark_linked` in `helm show --json`;
+#                          config.toml is gitignored, but for portfolios prefer
+#                          leaving it unset.
 # stripe_account_id = "acct_1NxxxYYY"
 # mercury_account_id = "abc-123-mercury-uuid"
 # postmark_server_token = "your-postmark-server-token"
-#   ↑ when set, helm fires `curl` against Postmark's /stats/outbound on
-#     startup and renders sent / bounced / spam counts for the last 30 days
-#     inline under the business bullet. Token rides in
-#     X-Postmark-Server-Token via curl's `-H @-` (never on argv).
-#     config.toml is gitignored — but for portfolios prefer leaving the
-#     field unset entirely.
 
 # SSH config auto-discovery. Defaults: enabled, ~/.ssh/config, no ignore list.
 # Aliases listed in `ignore` are dropped from the merged host list (useful for
@@ -120,10 +106,10 @@ ignore = ["relay-git"]
 laptop = "macos"
 linux-vps = "linux"
 
-# Shortcuts — quick-fire remote commands. Press `a` from Browse to open the
-# palette filtered to the selected host, then the shortcut's single-char key.
-# Commands run through the Runner, so `doas` prompts still surface the
-# password modal. Omit `hosts` (or pass an empty list) to apply everywhere.
+# Shortcuts — named quick-fire remote commands, run with `helm run <key>
+# <host> --yes` (operator-only; refuses without --yes). A `doas`/sudo password
+# can't be answered over the non-interactive `run` path — use `helm shell` for
+# those. Omit `hosts` (or pass an empty list) to apply everywhere.
 
 [[shortcuts]]
 key = "H"
@@ -136,11 +122,11 @@ key = "u"
 label = "uptime + load"
 cmd = "uptime && w -h | wc -l"
 
-# Logs — `l` from Browse opens a picker filtered to the selected host, then
-# the log's single-char key streams `ssh -tt <alias> tail -n 200 -F <path>`.
-# Esc kills the tail. Built-in defaults (m=messages, d=daemon, a=authlog) are
-# always available; custom entries here add to them (and override on key
-# collision for matching hosts). Omit `hosts` to apply to every host.
+# Logs — `helm logs <host>` lists what's available; `helm logs <host> <key>`
+# tails one (`-f` streams `tail -F`, `-n N` sets the line count). Built-in
+# defaults (m=messages, d=daemon, a=authlog) are always available; custom
+# entries here add to them (and override on key collision for matching hosts).
+# Omit `hosts` to apply to every host.
 
 [[logs]]
 key = "H"
@@ -154,16 +140,7 @@ label = "httpd error"
 path = "/var/log/httpd/error.log"
 hosts = ["web"]
 
-# Vultr API overlay: helm reads `VULTR_API_KEY` from the environment.
-# Never put the key in this file — config.toml is gitignored but env-only
-# eliminates the risk of an accidental leak. If the var is unset, the
-# `v` pane shows `(set $VULTR_API_KEY to enable)` and the Browse detail
-# pane omits the Vultr lines. Example: `export VULTR_API_KEY=vultr_...`
-
-# Money overlay (`m` from Browse): helm shells out to two existing CLIs:
-#   stripe-pp-cli balance   — needs STRIPE_SECRET_KEY (or `stripe-pp-cli auth set-token`)
-#   mercury-pp-cli accounts — needs MERCURY_BEARER_AUTH (or `mercury-pp-cli auth set-token`)
-# Both CLIs handle their own auth — helm never reads the tokens. If either
-# CLI is missing or unauthenticated, the corresponding panel renders the
-# CLI's error message. There is intentionally no `[stripe]` or `[mercury]`
-# section in this file: tokens stay env-only by design.
+# Vultr overlay: `helm vultr` reads `VULTR_API_KEY` from the environment.
+# Never put the key in this file — config.toml is gitignored, but env-only
+# eliminates the risk of an accidental leak. If the var is unset, `helm vultr`
+# errors with `VULTR_API_KEY not set`. Example: `export VULTR_API_KEY=vultr_...`

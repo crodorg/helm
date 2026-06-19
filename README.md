@@ -98,12 +98,9 @@ helm also inspects the fleet those sessions live on. Each verb reads over ssh an
 | `helm svc <host>` | service inventory (rcctl / systemctl / launchctl) |
 | `helm ps <host> [-n N]` | top processes by CPU |
 | `helm ports <host>` | listening sockets |
-| `helm health` | per-business HTTPS reachability + TLS expiry |
-| `helm dns` | per-business A / AAAA / MX / CAA vs expected IP |
 | `helm vultr` | Vultr instances + monthly cost |
-| `helm money` | Stripe + Mercury balances |
 | `helm logs <host> [key] [-f]` | list or tail a host's logs |
-| `helm history [-n N]` | recent `helm exec` history (SQLite) |
+| `helm history [<id>] [-n N]` | recent `helm exec` history (SQLite); `<id>` shows one run's transcript |
 | `helm activity [-n N]` | recent agent audit log |
 
 Two mutating verbs are operator-only. They refuse without `--yes`, so they never sit on the un-gated agent surface:
@@ -142,11 +139,10 @@ permit nopass <user> cmd rcctl args ls failed
 A few verbs depend on something beyond ssh:
 
 - `helm vultr` needs `$VULTR_API_KEY` (read-only listing; the `reboot/halt/start/snapshot` mutations also use it).
-- `helm money` shells out to `stripe-pp-cli` + `mercury-pp-cli` from [printing-press-library](https://github.com/mvanhorn/printing-press-library). Bring-your-own works too — helm just expects a binary on `$PATH` that prints the Stripe/Mercury balance JSON shape.
 
 ### A "business" in helm
 
-`helm health`, `helm dns`, and `helm money` iterate `[[businesses]]`. The naming is historical — a business in helm is **any named thing with a domain**: personal site, side project, OSS landing page, a blog. Minimum entry for the health verb:
+A "business" is helm's noun for **any named thing with a domain** — a personal site, side project, OSS landing page, a blog. `[[businesses]]` entries link a domain to the host it runs on; `helm show <host>` lists the businesses on a host (flagging any linked to a Stripe/Mercury account). Minimum entry:
 
 ```toml
 [[businesses]]
@@ -190,20 +186,19 @@ helm shells out to the system `ssh` binary. Requirements:
 ```
 src/
 ├── main.rs               CLI dispatch + shell / exec / auth subcommands
-├── cli/                  read verbs (ls/svc/health/…) + the gated mutations
+├── cli/                  read verbs (ls/svc/ps/…) + the gated mutations
 ├── activity.rs           append-only JSONL audit log
 ├── config.rs             TOML loader, ssh-config merge
 ├── history.rs            SQLite-backed exec history
 ├── tmux.rs               session naming, ensure_session, list, send-keys, capture
 ├── mosh.rs               transport choice (mosh vs ssh) for the attach path
 ├── vultr.rs              Vultr API over curl, for the vultr verb
-├── money.rs              Stripe / Mercury balances via the pp CLIs
 ├── ssh/
 │   ├── sshconfig.rs      ~/.ssh/config parser
 │   ├── agent.rs          ssh-agent fingerprint diff
 │   ├── collect.rs        per-OS service / process collectors
 │   └── run.rs            spawn ssh -tt, mpsc stream, password-prompt heuristic
-└── inventory/            services / processes / ports / health / dns parsers
+└── inventory/            services / processes / ports parsers
 ```
 
 ## Testing
