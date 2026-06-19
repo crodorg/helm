@@ -53,24 +53,6 @@ pub struct MoneyCache {
     pub mercury_error: Option<String>,
 }
 
-impl MoneyCache {
-    /// Find a Mercury account by id (exact match). Used by per-business
-    /// linkage rendering in the Browse detail panel.
-    pub fn mercury_for_id(&self, id: &str) -> Option<&MercuryAccount> {
-        self.mercury.iter().find(|a| a.id == id)
-    }
-
-    pub fn stripe_for_connect(&self, account_id: &str) -> Option<&StripeSnapshot> {
-        self.stripe_connect.get(account_id)
-    }
-
-    pub fn stripe_error_for_connect(&self, account_id: &str) -> Option<&str> {
-        self.stripe_connect_errors
-            .get(account_id)
-            .map(String::as_str)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MoneySlot {
     Stripe,
@@ -366,51 +348,8 @@ mod tests {
     }
 
     #[test]
-    fn mercury_for_id_returns_match_or_none() {
-        let cache = MoneyCache {
-            mercury: parse_mercury_accounts(MERCURY_ACCOUNTS_FIXTURE).unwrap(),
-            ..Default::default()
-        };
-        let acc = cache.mercury_for_id("acc-2").expect("found");
-        assert_eq!(acc.name, "Tax Savings");
-        assert_eq!(acc.available_balance, 50000.0);
-        assert!(cache.mercury_for_id("nope").is_none());
-        assert!(cache.mercury_for_id("").is_none());
-    }
-
-    #[test]
     fn shorten_err_returns_first_non_blank() {
         assert_eq!(shorten_err(""), "");
         assert_eq!(shorten_err("\n\n  Error: nope  \nhint: ..."), "Error: nope");
-    }
-
-    #[test]
-    fn stripe_for_connect_routes_by_acct_id() {
-        let mut cache = MoneyCache::default();
-        cache.stripe_connect.insert(
-            "acct_alpha".into(),
-            StripeSnapshot {
-                available_cents: 100,
-                pending_cents: 25,
-                currency: "usd".into(),
-            },
-        );
-        cache
-            .stripe_connect_errors
-            .insert("acct_beta".into(), "401".into());
-
-        assert!(cache.stripe_for_connect("acct_alpha").is_some());
-        assert_eq!(
-            cache
-                .stripe_for_connect("acct_alpha")
-                .unwrap()
-                .available_cents,
-            100
-        );
-        assert!(cache.stripe_for_connect("acct_beta").is_none());
-        assert!(cache.stripe_for_connect("acct_missing").is_none());
-
-        assert_eq!(cache.stripe_error_for_connect("acct_beta"), Some("401"));
-        assert!(cache.stripe_error_for_connect("acct_alpha").is_none());
     }
 }

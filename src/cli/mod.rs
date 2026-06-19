@@ -15,6 +15,7 @@ mod checks;
 mod cloud;
 mod inventory;
 mod records;
+mod run;
 
 use std::process::ExitCode;
 
@@ -24,8 +25,8 @@ use serde_json::{Value, json};
 use crate::config::{Business, Config, Host, Provider};
 
 /// Route a verb to its command. Returns `Some(exit)` when `verb` is a known
-/// CLI command, `None` to let `main`'s legacy dispatch (shell-open sugar,
-/// TUI) handle it.
+/// CLI command, or `None` for an unknown verb (which `main` reports as an
+/// error).
 pub fn dispatch(verb: &str, args: &[String]) -> Option<ExitCode> {
     let exit = match verb {
         "ls" => ls(args),
@@ -37,6 +38,7 @@ pub fn dispatch(verb: &str, args: &[String]) -> Option<ExitCode> {
         "dns" => checks::dns(args),
         "vultr" => cloud::vultr(args),
         "money" => cloud::money(args),
+        "run" => run::run(args),
         "history" => records::history(args),
         "activity" => records::activity(args),
         "logs" | "log" => records::logs(args),
@@ -155,8 +157,7 @@ pub(crate) fn fail(msg: &str) -> ExitCode {
     ExitCode::FAILURE
 }
 
-/// Stable lowercase provider tag for JSON + tables (Provider::label is
-/// padded/uppercased for the old TUI badge).
+/// Stable lowercase provider tag for JSON + tables.
 pub(crate) fn provider_str(p: Provider) -> &'static str {
     match p {
         Provider::Local => "local",

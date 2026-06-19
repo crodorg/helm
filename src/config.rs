@@ -16,14 +16,6 @@ pub struct Config {
     pub shortcuts: Vec<Shortcut>,
     #[serde(default)]
     pub logs: Vec<Log>,
-    #[serde(default)]
-    pub features: Features,
-    /// When true (default), `helm` spawns a `helm daemon` after the TUI
-    /// exits so external `helm exec` calls still work. Set to false to
-    /// keep the operator's machine free of background daemons (e.g.
-    /// when running `helm` on a laptop only ad-hoc).
-    #[serde(default)]
-    pub auto_daemon: Option<bool>,
     /// Extra flags inserted after `tmux` on every tmux invocation helm
     /// makes — both the ssh'd remote scripts and the local attach. Unset
     /// defaults to `["-u"]` (force UTF-8, so box-drawing / unicode render
@@ -32,38 +24,6 @@ pub struct Config {
     /// `["-u", "-2"]`). Resolve via [`Config::tmux_flags`].
     #[serde(default)]
     pub tmux_flags: Option<Vec<String>>,
-}
-
-/// Optional Browse-pane toggles. Helm ships several side panes that are
-/// only useful with specific external dependencies (Vultr API key, custom
-/// DNS resolver setup, the printing-press money CLIs). They default to
-/// off so a fresh install shows only the panes everyone needs; flip the
-/// relevant flag in `config.toml` to surface them.
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct Features {
-    #[serde(default)]
-    pub health: bool,
-    #[serde(default)]
-    pub vultr: bool,
-    #[serde(default)]
-    pub dns: bool,
-    #[serde(default)]
-    pub money: bool,
-}
-
-impl Features {
-    /// Returns true when the binding key should be visible in the Browse
-    /// keys panel + the help overlay. Bindings the operator hasn't opted
-    /// into stay hidden; the dispatch handler also treats them as no-ops.
-    pub fn browse_key_enabled(&self, key: &str) -> bool {
-        match key {
-            "H" => self.health,
-            "v" => self.vultr,
-            "d" => self.dns,
-            "m" => self.money,
-            _ => true,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -122,15 +82,15 @@ fn log_entry(key: char, label: &str, path: &str) -> Log {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Shortcut {
-    /// Single key that fires this shortcut from the palette overlay.
+    /// Single key that selects this shortcut for `helm run <key> <host>`.
     pub key: char,
-    /// Human label shown in the palette and history.
+    /// Human label shown in `helm run` output and the activity log.
     pub label: String,
-    /// The actual remote command. Runs through the existing Runner, so
-    /// `doas` / `sudo` prompts surface the password modal.
+    /// The remote command `helm run` executes over ssh. An interactive
+    /// `doas` / `sudo` prompt can't be answered — use `helm shell` for that.
     pub cmd: String,
-    /// ssh_alias values this shortcut applies to. Empty = applies to every
-    /// host. Helm filters the palette by the currently selected host.
+    /// ssh_alias values this shortcut applies to. Empty = every host.
+    /// `helm run` refuses a key whose shortcut doesn't list the target.
     #[serde(default)]
     pub hosts: Vec<String>,
 }
@@ -173,9 +133,6 @@ impl Host {
     pub fn display_hostname(&self) -> &str {
         self.hostname.as_deref().unwrap_or("?")
     }
-    pub fn display_user(&self) -> &str {
-        self.user.as_deref().unwrap_or("?")
-    }
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
@@ -209,17 +166,6 @@ impl OsFamily {
             OsFamily::Openbsd => "openbsd",
             OsFamily::Linux => "linux",
             OsFamily::Macos => "macos",
-        }
-    }
-}
-
-impl Provider {
-    pub fn label(self) -> &'static str {
-        match self {
-            Provider::Local => "LOCAL",
-            Provider::Vultr => "VULTR",
-            Provider::Buyvm => "BUYVM",
-            Provider::Unknown => "  ?  ",
         }
     }
 }
@@ -301,11 +247,10 @@ pub struct Business {
     #[serde(default)]
     pub mercury_account_id: Option<String>,
     /// Optional Postmark server token (per Postmark "server", i.e. per
-    /// business). When set, helm fires a stats fetch on startup and the
-    /// Browse detail panel renders last-30-day Sent / Bounced / Spam
-    /// counts. The token lives in `config.toml` (gitignored); for
-    /// portfolios prefer leaving it unset and shipping the field as
-    /// documentation only.
+    /// business). Currently a linkage indicator only — `helm show --json`
+    /// reports `postmark_linked: true` when it is set. The token lives in
+    /// `config.toml` (gitignored); for portfolios prefer leaving it unset
+    /// and shipping the field as documentation only.
     #[serde(default)]
     pub postmark_server_token: Option<String>,
 }

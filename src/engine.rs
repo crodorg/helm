@@ -305,16 +305,6 @@ impl Engine {
             tracing::warn!("history: insert_run(agent) failed: {e}");
         }
     }
-
-    /// Header chip text describing current agent activity.
-    pub fn agent_indicator(&self) -> String {
-        if let Some(active) = self.agent_active.as_ref() {
-            let snippet = truncate(&active.handle.command, 40);
-            format!("🤖 {} › {}", active.handle.alias, snippet)
-        } else {
-            format!("🤖 idle ({})", self.agent_history.len())
-        }
-    }
 }
 
 impl Default for Engine {
@@ -344,15 +334,5 @@ fn agent_line_to_record(l: &AgentOutputLine) -> LineRecord {
             kind: LineKind::System,
             line: s.clone(),
         },
-    }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
-        out.push('…');
-        out
     }
 }

@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::Read;
 use std::process::{ChildStdin, Command, Stdio};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
@@ -32,13 +32,12 @@ pub struct RunHandle {
 }
 
 impl RunHandle {
-    pub fn send_line(&mut self, line: &str) -> std::io::Result<()> {
-        if let Some(s) = self.stdin.as_mut() {
-            s.write_all(line.as_bytes())?;
-            s.write_all(b"\n")?;
-            s.flush()?;
-        }
-        Ok(())
+    /// Close the child's stdin (send EOF). `helm run` calls this when a
+    /// remote password prompt appears: it can't answer interactively, so
+    /// EOF makes `doas`/`sudo` fail fast instead of blocking the drain loop
+    /// forever on a PTY read no one will satisfy.
+    pub fn close_stdin(&mut self) {
+        let _ = self.stdin.take();
     }
 }
 

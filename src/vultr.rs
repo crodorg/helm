@@ -73,15 +73,6 @@ impl VultrCache {
             .find(|p| p.id == plan_id)
             .map(|p| p.monthly_cost)
     }
-
-    /// Find the instance whose `main_ip` exactly matches `ip`. No DNS
-    /// resolution — the caller must pass a real IPv4 literal.
-    pub fn instance_for_ip(&self, ip: &str) -> Option<&Instance> {
-        if ip.is_empty() {
-            return None;
-        }
-        self.instances.iter().find(|i| i.main_ip == ip)
-    }
 }
 
 /// Which API endpoint produced a `VultrResult`.
@@ -186,12 +177,10 @@ impl ActionKind {
     }
 }
 
-/// One completed action call. `body` is the API response (often empty
+/// One completed action call. `outcome` is the API response (often empty
 /// for 2xx) or a human-readable error string.
 #[derive(Debug)]
 pub struct ActionResult {
-    pub action: ActionKind,
-    pub label: String,
     pub outcome: Result<String, String>,
 }
 
@@ -201,7 +190,6 @@ pub fn spawn_vultr_action(
     api_key: String,
     action: ActionKind,
     instance_id: String,
-    label: String,
 ) -> Receiver<ActionResult> {
     let (tx, rx) = channel();
     thread::spawn(move || {
@@ -211,7 +199,10 @@ pub fn spawn_vultr_action(
         );
         let auth = format!("Authorization: Bearer {api_key}");
         let mut cmd = Command::new("curl");
-        cmd.args(["-sS", "-m", "30", "-X", "POST", "-H"])
+        // `-f` so an HTTP 4xx/5xx (e.g. bad instance id) is a non-zero curl
+        // exit rather than a 200-shaped "success" — a billable/destructive
+        // action must not report `ok` on a rejected request.
+        cmd.args(["-sS", "-f", "-m", "30", "-X", "POST", "-H"])
             .arg(&auth)
             .args(["-H", "Content-Type: application/json"]);
         if let Some(body) = action.body_for(&instance_id) {
@@ -227,11 +218,7 @@ pub fn spawn_vultr_action(
             )),
             Err(e) => Err(format!("vultr action curl spawn failed: {e}")),
         };
-        let _ = tx.send(ActionResult {
-            action,
-            label,
-            outcome,
-        });
+        let _ = tx.send(ActionResult { outcome });
     });
     rx
 }
@@ -323,27 +310,6 @@ mod tests {
     fn rejects_malformed_json() {
         assert!(parse_instances("not json").is_err());
         assert!(parse_plans("{\"plans\": \"oops\"}").is_err());
-    }
-
-    #[test]
-    fn instance_for_ip_exact_match() {
-        let cache = VultrCache {
-            instances: parse_instances(INSTANCES_FIXTURE).unwrap(),
-            plans: vec![],
-        };
-        let inst = cache.instance_for_ip("203.0.113.11").expect("found");
-        assert_eq!(inst.id, "abc-2");
-    }
-
-    #[test]
-    fn instance_for_ip_misses_on_partial() {
-        let cache = VultrCache {
-            instances: parse_instances(INSTANCES_FIXTURE).unwrap(),
-            plans: vec![],
-        };
-        assert!(cache.instance_for_ip("203.0.113").is_none());
-        assert!(cache.instance_for_ip("").is_none());
-        assert!(cache.instance_for_ip("nope").is_none());
     }
 
     #[test]

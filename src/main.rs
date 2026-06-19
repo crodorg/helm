@@ -1,18 +1,14 @@
 mod activity;
-mod app;
 mod cli;
 mod config;
 mod engine;
-mod help;
 mod history;
 mod inventory;
 mod ipc;
 mod money;
 mod mosh;
-mod postmark;
 mod ssh;
 mod tmux;
-mod ui;
 mod vultr;
 
 use std::io;
@@ -20,77 +16,63 @@ use std::process::Command;
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::{
-    event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
-        MouseEvent, MouseEventKind,
-    },
-    execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
-};
-use ratatui::{
-    Terminal,
-    backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Rect},
-};
 
-use crate::app::{App, InputFocus, Mode, OutputLine};
 use crate::config::Config;
 use crate::ipc::protocol::Request as IpcRequest;
-use crate::ssh::spawn_remote;
 
 fn main() -> std::process::ExitCode {
     let argv: Vec<String> = std::env::args().collect();
-    if let Some(sub) = argv.get(1) {
-        match sub.as_str() {
-            "exec" => return run_exec_cli(&argv[2..]),
-            "shell" => return run_shell_cli(&argv[2..]),
-            "auth" => return run_auth_cli(&argv[2..]),
-            "daemon" => return run_daemon_cli(&argv[2..]),
-            "--help" | "-h" | "help" => {
-                print_help();
-                return std::process::ExitCode::SUCCESS;
-            }
-            other if !other.starts_with('-') => {
-                // Known read verb (`ls`, `svc`, `health`, …)? Handle and exit.
-                // These are reserved words — an ssh alias colliding with one
-                // is shadowed (Phase 3 makes attach explicit via `helm open`).
-                if let Some(exit) = cli::dispatch(other, &argv[2..]) {
-                    return exit;
-                }
-                // Otherwise bare `helm <target>` is sugar for `helm shell open
-                // <target>`: attach a persistent shell to any ssh alias / host
-                // / IP. The whole tail (argv[1..]) is forwarded so
-                // `<alias>:<label>` works; an unknown host surfaces ssh's own
-                // error, which is the right feedback for a typo'd alias.
-                let mut shell_args = vec!["open".to_string()];
-                shell_args.extend(argv[1..].iter().cloned());
-                return run_shell_cli(&shell_args);
-            }
-            _ => {}
+    let Some(sub) = argv.get(1) else {
+        // No subcommand — print usage and exit. (The TUI used to launch
+        // here; helm is CLI-only now.)
+        print_help();
+        return std::process::ExitCode::SUCCESS;
+    };
+    match sub.as_str() {
+        "exec" => run_exec_cli(&argv[2..]),
+        "shell" => run_shell_cli(&argv[2..]),
+        "open" => {
+            // `helm open <target>` attaches a persistent shell to any ssh
+            // alias / host / IP — the explicit successor to the old bare
+            // `helm <target>` sugar. Forward the tail so `<alias>:<label>`
+            // works.
+            let mut shell_args = vec!["open".to_string()];
+            shell_args.extend(argv[2..].iter().cloned());
+            run_shell_cli(&shell_args)
         }
-    }
-    match run_tui() {
-        Ok(()) => std::process::ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("helm: {e}");
-            std::process::ExitCode::FAILURE
+        "auth" => run_auth_cli(&argv[2..]),
+        "daemon" => run_daemon_cli(&argv[2..]),
+        "--help" | "-h" | "help" => {
+            print_help();
+            std::process::ExitCode::SUCCESS
+        }
+        other if !other.starts_with('-') => {
+            // Read verb (`ls`, `svc`, `health`, …)? Handle and exit. These
+            // are reserved words; an ssh alias colliding with one is
+            // shadowed — attach explicitly with `helm open <alias>`.
+            if let Some(exit) = cli::dispatch(other, &argv[2..]) {
+                return exit;
+            }
+            eprintln!("helm: unknown command `{other}` (see `helm help`)");
+            std::process::ExitCode::from(2)
+        }
+        other => {
+            eprintln!("helm: unknown flag `{other}` (see `helm help`)");
+            std::process::ExitCode::from(2)
         }
     }
 }
 
 fn print_help() {
     eprintln!(
-        "helm — TUI fleet manager + remote command bridge
+        "helm — fleet manager + remote command bridge
 
 usage:
-  helm                          launch the TUI
-  helm <target>                 shortcut for `helm shell open <target>` —
-                                attach a persistent shell to any ssh alias,
-                                host, or IP (e.g. `helm router`, `helm web:deploy`)
+  helm open <target>            attach a persistent shell to any ssh alias,
+                                host, or IP (e.g. `helm open web`,
+                                `helm open web:deploy`)
   helm exec <alias> <cmd...>    run a one-shot command on a host through the
-                                running daemon (or TUI) over its control
-                                socket
+                                running daemon over its control socket
   helm shell <subcommand>       drive a persistent tmux-backed shell session
                                 per VPS (see `helm shell help`)
 
@@ -107,6 +89,11 @@ usage:
   helm logs <host> [key] [-f]   list or tail a host's logs
   helm history [-n N]           recent command history
   helm activity [-n N]          recent agent audit log
+
+  mutations (operator-only; refuse without --yes):
+  helm vultr reboot|halt|start|snapshot <id> --yes
+  helm run <key> <host> --yes   run a [[shortcuts]] command on a host
+
   helm auth [--load]            verify ssh-agent has every key helm hosts
                                 depend on; exit 0/non-zero (see `helm auth help`)
   helm daemon [start|stop|status]
@@ -121,10 +108,8 @@ fn print_daemon_help() {
         "helm daemon — headless control daemon
 
 The daemon binds helm's control socket and services `helm exec` requests
-so external operators (e.g. AI agents) can drive remote commands while
-your TUI is closed. Only one process — TUI or daemon — owns the socket
-at a time; starting the TUI auto-shuts down a running daemon and
-re-spawns one when the TUI exits.
+so external operators (e.g. AI agents) can drive remote commands. Start
+it before using `helm exec`; only one daemon owns the socket at a time.
 
 usage:
   helm daemon            run in the foreground (logs to stderr); exits
@@ -132,7 +117,7 @@ usage:
   helm daemon start      spawn a detached daemon and exit once the
                          socket is reachable
   helm daemon stop       ask a running daemon to exit cleanly
-  helm daemon status     exit 0 if a daemon (or TUI) is reachable; 1
+  helm daemon status     exit 0 if a daemon is reachable; 1
                          otherwise. Prints the responder's version.
   helm daemon help       this help"
     );
@@ -189,7 +174,7 @@ usage:
                                       for your own machine)
   helm shell close <target>           kill the session
 
-tip: `helm <target>` is shorthand for `helm shell open <target>`.
+tip: `helm open <target>` is shorthand for `helm shell open <target>`.
 
 Every tmux call helm makes carries the flags from `tmux_flags` in
 config.toml (default `[\"-u\"]`, force UTF-8). Set `tmux_flags = []` to
@@ -560,8 +545,8 @@ fn log_action(
 
 /// Load ~/.ssh/config according to the cfg's `[ssh_config]` section,
 /// merging the parsed hosts into `cfg` and returning the unmerged list
-/// so the agent check can iterate IdentityFiles. Shared between
-/// `run_tui` and `run_auth_cli`.
+/// so the agent check can iterate IdentityFiles. Shared by
+/// `run_auth_cli` and the daemon startup.
 fn load_ssh_hosts_for(cfg: &mut Config) -> Vec<crate::ssh::sshconfig::SshHost> {
     if !cfg.ssh_config.enabled {
         return Vec::new();
@@ -715,9 +700,9 @@ fn run_daemon_foreground_cli() -> std::process::ExitCode {
     }
 }
 
-/// Headless engine + IPC server loop. Mirrors `run_tui` setup minus the
-/// terminal and the App, then drives a small tokio runtime to multiplex
-/// signal handling with periodic engine ticks.
+/// Headless engine + IPC server loop: loads config + binds the IPC server,
+/// then drives a small tokio runtime to multiplex signal handling with
+/// periodic engine ticks.
 fn run_daemon_foreground() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -879,623 +864,4 @@ fn run_daemon_status_cli() -> std::process::ExitCode {
             std::process::ExitCode::FAILURE
         }
     }
-}
-
-fn run_tui() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_writer(io::stderr)
-        .init();
-
-    let mut cfg = Config::load()?;
-    tmux::set_flags(cfg.tmux_flags());
-    let ssh_hosts = load_ssh_hosts_for(&mut cfg);
-    let agent_status = crate::ssh::agent::check(&ssh_hosts);
-    if let Some(msg) = crate::ssh::agent::render_blocker(&agent_status, &ssh_hosts) {
-        eprintln!("{msg}");
-        std::process::exit(1);
-    }
-    let auto_daemon = cfg.auto_daemon.unwrap_or(true);
-    let mut app = App::new(cfg);
-    match history::HistoryStore::open_default() {
-        Ok(store) => app.attach_history(store, 100),
-        Err(e) => eprintln!("helm: warning — could not open history db: {e}"),
-    }
-    app.start_vultr_fetch();
-    // Eager money fetch when any business declares Stripe/Mercury linkage,
-    // so the Browse detail panel renders balances without forcing the
-    // operator to press `m` first.
-    let any_money_linkage = app
-        .config
-        .businesses
-        .iter()
-        .any(|b| b.stripe_account_id.is_some() || b.mercury_account_id.is_some());
-    if any_money_linkage {
-        app.start_money_fetch();
-    }
-    // Same pattern for Postmark — fire on startup if any business sets a
-    // token, so the Browse detail panel populates without operator action.
-    let any_postmark = app
-        .config
-        .businesses
-        .iter()
-        .any(|b| b.postmark_server_token.is_some());
-    if any_postmark {
-        app.start_postmark_fetch();
-    }
-
-    // IPC server — bind socket, hand jobs to the engine via mpsc. `_guard`
-    // lives until the end of run_tui so its Drop removes the socket file
-    // when helm exits cleanly. The TUI ignores `shutdown_rx`; only the
-    // daemon listens for that signal.
-    //
-    // Coexistence: if a `helm daemon` is already bound, ask it to shut
-    // down so we can take over the socket. The TUI is the privileged
-    // owner while open (single binder). On clean exit below we re-spawn
-    // a daemon so external `helm exec` keeps working.
-    let socket = crate::ipc::socket_path();
-    if let Ok(Some(v)) = crate::ipc::client::ping_socket(&socket) {
-        eprintln!("helm: handing off from running daemon v{v}");
-        if let Err(e) = crate::ipc::client::shutdown_socket(&socket, Duration::from_secs(3)) {
-            eprintln!("helm: warning — daemon shutdown signal failed: {e}");
-        }
-    }
-    let _guard = match crate::ipc::server::start(socket.clone()) {
-        Ok(handles) => {
-            eprintln!(
-                "helm: control socket at {}",
-                handles.guard.socket_path.display()
-            );
-            app.engine.attach_jobs_rx(handles.jobs_rx);
-            Some(handles.guard)
-        }
-        Err(e) => {
-            eprintln!("helm: warning — could not bind control socket: {e}");
-            None
-        }
-    };
-
-    let mut terminal = setup_terminal()?;
-    let res = run(&mut terminal, &mut app);
-    restore_terminal(&mut terminal)?;
-
-    // Drop the socket guard BEFORE spawning the replacement daemon so its
-    // bind doesn't race with our unlink. `_guard` is Some when we owned
-    // the socket; None means we couldn't bind in the first place, so
-    // there's nothing to hand off and spawning a daemon would help future
-    // `helm exec` calls.
-    drop(_guard);
-    if auto_daemon {
-        match spawn_detached_daemon() {
-            Ok(pid) => eprintln!("helm: daemon up (pid {pid}) — `helm exec` reachable"),
-            Err(e) => eprintln!("helm: warning — auto-spawn daemon failed: {e}"),
-        }
-    }
-    res
-}
-
-type Term = Terminal<CrosstermBackend<io::Stdout>>;
-
-fn setup_terminal() -> Result<Term> {
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    Ok(Terminal::new(CrosstermBackend::new(stdout))?)
-}
-
-fn restore_terminal(terminal: &mut Term) -> Result<()> {
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
-    Ok(())
-}
-
-fn run(terminal: &mut Term, app: &mut App) -> Result<()> {
-    while !app.should_quit {
-        app.ingest_run_events();
-        app.ingest_services_events();
-        app.ingest_shell_sessions_events();
-        app.ingest_processes_events();
-        app.ingest_health_events();
-        app.ingest_vultr_events();
-        app.ingest_vultr_action_events();
-        app.ingest_money_events();
-        app.ingest_dns_events();
-        app.ingest_postmark_events();
-        app.ingest_log_tail_events();
-        app.ingest_jobs();
-        app.ingest_agent_events();
-
-        terminal.draw(|f| ui::draw(f, app))?;
-
-        if event::poll(Duration::from_millis(120))? {
-            match event::read()? {
-                Event::Key(k) if k.kind == KeyEventKind::Press => handle_key(app, k.code),
-                Event::Mouse(m) => {
-                    let area = terminal
-                        .size()
-                        .map(|s| Rect::new(0, 0, s.width, s.height))?;
-                    handle_mouse(app, m, area);
-                }
-                _ => {}
-            }
-        }
-
-        if let Some(target) = app.launch_shell.take() {
-            run_shell_session(terminal, app, &target)?;
-        }
-    }
-    Ok(())
-}
-
-fn handle_key(app: &mut App, code: KeyCode) {
-    // `?` opens the help overlay from any non-text-input mode. Inside
-    // Runner with focus=Password|Command, `?` is a literal character and
-    // must reach the buffer. Shortcuts and LogPicker are single-key
-    // dispatch palettes — letting `?` open another overlay on top of them
-    // is more confusing than helpful, so skip there too. Help itself
-    // closes via `?` (handled in handle_help).
-    if matches!(code, KeyCode::Char('?'))
-        && !matches!(app.mode, Mode::Help | Mode::Shortcuts | Mode::LogPicker)
-        && !(app.mode == Mode::Runner && app.runner.focus.is_some())
-    {
-        app.open_help();
-        return;
-    }
-
-    // `h` doubles as Esc — vim-style "go back" everywhere except Browse
-    // (the root, nothing to back to), input-text contexts, and the
-    // single-key dispatch palettes (where `h` could be a literal
-    // shortcut). Capital `H` retains the health-pane shortcut from
-    // Browse so the keybind isn't lost.
-    let code = if matches!(code, KeyCode::Char('h'))
-        && !matches!(
-            app.mode,
-            Mode::Browse | Mode::Help | Mode::Shortcuts | Mode::LogPicker
-        )
-        && !(app.mode == Mode::Runner && app.runner.focus.is_some())
-    {
-        KeyCode::Esc
-    } else {
-        code
-    };
-
-    match app.mode {
-        Mode::Browse => handle_browse(app, code),
-        Mode::Runner => handle_runner(app, code),
-        Mode::Services => handle_services(app, code),
-        Mode::Shortcuts => handle_shortcuts(app, code),
-        Mode::AgentTail => handle_agent_tail(app, code),
-        Mode::Processes => handle_processes(app, code),
-        Mode::Health => handle_health(app, code),
-        Mode::Vultr => handle_vultr(app, code),
-        Mode::Money => handle_money(app, code),
-        Mode::LogPicker => handle_log_picker(app, code),
-        Mode::LogTail => handle_log_tail(app, code),
-        Mode::History => handle_history(app, code),
-        Mode::Dns => handle_dns(app, code),
-        Mode::ShellSessions => handle_shell_sessions(app, code),
-        Mode::Help => handle_help(app, code),
-    }
-}
-
-fn handle_shell_sessions(app: &mut App, code: KeyCode) {
-    match code {
-        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('h') => app.close_shell_sessions(),
-        KeyCode::Char('j') | KeyCode::Down => app.shell_sessions_select_next(),
-        KeyCode::Char('k') | KeyCode::Up => app.shell_sessions_select_prev(),
-        KeyCode::Enter => app.open_selected_shell_session(),
-        KeyCode::Char('d') => app.detach_selected_shell_session(),
-        KeyCode::Char('r') => app.refresh_shell_sessions(),
-        _ => {}
-    }
-}
-
-fn handle_help(app: &mut App, code: KeyCode) {
-    if matches!(code, KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q')) {
-        app.close_help();
-    }
-}
-
-fn handle_log_picker(app: &mut App, code: KeyCode) {
-    match code {
-        KeyCode::Esc => app.close_log_picker(),
-        KeyCode::Char(c) => {
-            let _ = app.fire_log(c);
-        }
-        _ => {}
-    }
-}
-
-fn handle_log_tail(app: &mut App, code: KeyCode) {
-    if let Some(state) = app.log_tail.as_ref()
-        && handle_scroll_keys(&state.scroll, code)
-    {
-        return;
-    }
-    if matches!(code, KeyCode::Esc) {
-        app.close_log_tail();
-    }
-}
-
-/// Dispatch j/k/PgUp/PgDn/g/G to a ScrollState. Returns true if the key
-/// was consumed (so the caller doesn't double-handle Esc/etc.).
-fn handle_scroll_keys(scroll: &crate::app::ScrollState, code: KeyCode) -> bool {
-    match code {
-        KeyCode::Char('j') | KeyCode::Down => {
-            scroll.line_down();
-            true
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            scroll.line_up();
-            true
-        }
-        KeyCode::PageDown => {
-            scroll.page_down();
-            true
-        }
-        KeyCode::PageUp => {
-            scroll.page_up();
-            true
-        }
-        KeyCode::Char('g') => {
-            scroll.to_top();
-            true
-        }
-        KeyCode::Char('G') => {
-            scroll.to_bottom();
-            true
-        }
-        _ => false,
-    }
-}
-
-fn handle_money(app: &mut App, code: KeyCode) {
-    match code {
-        KeyCode::Esc => app.close_money(),
-        KeyCode::Char('r') => app.refresh_money(),
-        KeyCode::Char('f') => app.cycle_money_filter(),
-        _ => {}
-    }
-}
-
-fn handle_dns(app: &mut App, code: KeyCode) {
-    if let Some(state) = app.dns_pane.as_ref()
-        && handle_scroll_keys(&state.scroll, code)
-    {
-        return;
-    }
-    match code {
-        KeyCode::Esc => app.close_dns(),
-        KeyCode::Char('r') => app.refresh_dns(),
-        _ => {}
-    }
-}
-
-fn handle_history(app: &mut App, code: KeyCode) {
-    match code {
-        KeyCode::Esc => app.close_history(),
-        KeyCode::Char('r') => app.refresh_history(),
-        KeyCode::Char('j') | KeyCode::Down => app.history_next(),
-        KeyCode::Char('k') | KeyCode::Up => app.history_prev(),
-        KeyCode::Enter => app.replay_selected_history(),
-        _ => {}
-    }
-}
-
-fn handle_vultr(app: &mut App, code: KeyCode) {
-    // Confirm modal takes precedence — swallow all keys but the
-    // y/n/esc trio so the user can't accidentally fire a scroll-key
-    // shortcut while the prompt is on screen.
-    if app.vultr_confirm.is_some() {
-        match code {
-            KeyCode::Char('y') | KeyCode::Char('Y') => app.vultr_confirm_action(),
-            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => app.vultr_cancel_action(),
-            _ => {}
-        }
-        return;
-    }
-    // Row selection: j/k drive the highlighted row + ensure_visible
-    // auto-scroll, so we override the default scroll-key wiring here.
-    match code {
-        KeyCode::Char('j') | KeyCode::Down => {
-            app.vultr_select_next();
-            return;
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            app.vultr_select_prev();
-            return;
-        }
-        _ => {}
-    }
-    if handle_scroll_keys(&app.vultr_scroll, code) {
-        return;
-    }
-    match code {
-        KeyCode::Esc => app.close_vultr(),
-        KeyCode::Char('r') => app.refresh_vultr(),
-        KeyCode::Char('R') => app.vultr_request_action(crate::vultr::ActionKind::Reboot),
-        KeyCode::Char('H') => app.vultr_request_action(crate::vultr::ActionKind::Halt),
-        KeyCode::Char('S') => app.vultr_request_action(crate::vultr::ActionKind::Start),
-        KeyCode::Char('N') => app.vultr_request_action(crate::vultr::ActionKind::Snapshot),
-        _ => {}
-    }
-}
-
-fn handle_health(app: &mut App, code: KeyCode) {
-    if let Some(state) = app.health_pane.as_ref()
-        && handle_scroll_keys(&state.scroll, code)
-    {
-        return;
-    }
-    match code {
-        KeyCode::Esc => app.close_health(),
-        KeyCode::Char('r') => app.refresh_health(),
-        _ => {}
-    }
-}
-
-fn handle_processes(app: &mut App, code: KeyCode) {
-    if let Some(state) = app.processes_pane.as_ref()
-        && handle_scroll_keys(&state.scroll, code)
-    {
-        return;
-    }
-    match code {
-        KeyCode::Esc => app.close_processes(),
-        KeyCode::Char('r') => app.refresh_processes(),
-        _ => {}
-    }
-}
-
-fn handle_agent_tail(app: &mut App, code: KeyCode) {
-    if handle_scroll_keys(&app.agent_tail_scroll, code) {
-        return;
-    }
-    if matches!(code, KeyCode::Esc | KeyCode::Char('q')) {
-        app.close_agent_tail();
-    }
-}
-
-fn handle_browse(app: &mut App, code: KeyCode) {
-    match code {
-        KeyCode::Char('q') | KeyCode::Esc => app.quit(),
-        KeyCode::Char('j') | KeyCode::Down => app.next_host(),
-        KeyCode::Char('k') | KeyCode::Up => app.prev_host(),
-        KeyCode::Enter => app.request_helm_shell(),
-        KeyCode::Char('r') => app.open_runner(),
-        KeyCode::Char('s') => app.open_services(),
-        KeyCode::Char('S') => app.open_shell_sessions(),
-        KeyCode::Char('p') => app.open_processes(),
-        KeyCode::Char('H') if app.config.features.health => app.open_health(),
-        KeyCode::Char('v') if app.config.features.vultr => app.open_vultr(),
-        KeyCode::Char('m') if app.config.features.money => app.open_money(),
-        KeyCode::Char('l') => app.open_log_picker(),
-        KeyCode::Char('t') => app.open_history(),
-        KeyCode::Char('d') if app.config.features.dns => app.open_dns(),
-        KeyCode::Char('a') => app.open_shortcuts(),
-        KeyCode::Char('c') => app.open_agent_tail(),
-        KeyCode::Char('R') => app.refresh_all_overlays(),
-        KeyCode::F(5) => app.reload_config(),
-        _ => {}
-    }
-}
-
-fn handle_shortcuts(app: &mut App, code: KeyCode) {
-    match code {
-        KeyCode::Esc => app.close_shortcuts(),
-        // Unknown chars leave the palette open until Esc.
-        KeyCode::Char(c) => {
-            let _ = app.fire_shortcut(c);
-        }
-        _ => {}
-    }
-}
-
-fn handle_services(app: &mut App, code: KeyCode) {
-    if let Some(state) = app.services.as_ref()
-        && handle_scroll_keys(&state.scroll, code)
-    {
-        return;
-    }
-    match code {
-        KeyCode::Esc => app.close_services(),
-        KeyCode::Char('r') => app.refresh_services(),
-        _ => {}
-    }
-}
-
-fn handle_mouse(app: &mut App, m: MouseEvent, term: Rect) {
-    match (app.mode, m.kind) {
-        // Scroll wheel = host navigation everywhere it makes sense.
-        (Mode::Browse, MouseEventKind::ScrollDown) => app.next_host(),
-        (Mode::Browse, MouseEventKind::ScrollUp) => app.prev_host(),
-
-        // Click in the browse host list → select that row.
-        (Mode::Browse, MouseEventKind::Down(MouseButton::Left)) => {
-            if let Some(idx) = browse_row_at(term, m.column, m.row, app.hosts().len()) {
-                app.selected = idx;
-            }
-        }
-
-        _ => {}
-    }
-}
-
-/// Recompute the browse host-list bounds from terminal area and translate a
-/// click coordinate to a host index. Mirrors the layout in `ui::draw` +
-/// `ui::browse::draw`. Returns None if the click is outside the list rows.
-fn browse_row_at(term: Rect, col: u16, row: u16, host_count: usize) -> Option<usize> {
-    if host_count == 0 {
-        return None;
-    }
-    let outer = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
-        .split(term);
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
-        .split(outer[1]);
-    let list_area = cols[0];
-
-    // Subtract the bordered Block's 1-row top/bottom and 1-col left/right.
-    let inner_x = list_area.x + 1;
-    let inner_y = list_area.y + 1;
-    let inner_w = list_area.width.saturating_sub(2);
-    let inner_h = list_area.height.saturating_sub(2);
-
-    if col < inner_x || col >= inner_x + inner_w {
-        return None;
-    }
-    if row < inner_y || row >= inner_y + inner_h {
-        return None;
-    }
-    let idx = (row - inner_y) as usize;
-    if idx < host_count { Some(idx) } else { None }
-}
-
-fn handle_runner(app: &mut App, code: KeyCode) {
-    // PgUp/PgDn always scroll, regardless of focus (they're not text input
-    // characters). j/k/g/G only when not actively typing — they'd be
-    // captured as command/password characters otherwise.
-    match code {
-        KeyCode::PageUp => {
-            app.runner.scroll.page_up();
-            return;
-        }
-        KeyCode::PageDown => {
-            app.runner.scroll.page_down();
-            return;
-        }
-        _ => {}
-    }
-    if app.runner.focus.is_none() && handle_scroll_keys(&app.runner.scroll, code) {
-        return;
-    }
-    match app.runner.focus {
-        Some(InputFocus::Password) => match code {
-            KeyCode::Esc => {
-                app.runner.password.clear();
-                app.runner.focus = Some(InputFocus::Command);
-            }
-            KeyCode::Enter => {
-                let pw = std::mem::take(&mut app.runner.password);
-                if let Some(h) = app.run_handle.as_mut()
-                    && let Err(e) = h.send_line(&pw)
-                {
-                    app.runner
-                        .output
-                        .push(OutputLine::System(format!("write password failed: {e}")));
-                }
-                app.runner.focus = None;
-            }
-            KeyCode::Backspace => {
-                app.runner.password.pop();
-            }
-            KeyCode::Char(c) => app.runner.password.push(c),
-            _ => {}
-        },
-        Some(InputFocus::Command) => match code {
-            KeyCode::Esc => app.close_runner(),
-            KeyCode::Enter => submit_command(app),
-            KeyCode::Backspace => {
-                app.runner.input.pop();
-            }
-            KeyCode::Char(c) => app.runner.input.push(c),
-            _ => {}
-        },
-        None => match code {
-            KeyCode::Esc => app.close_runner(),
-            KeyCode::Char('r') => {
-                app.runner.input.clear();
-                app.runner.output.clear();
-                app.runner.exit_code = None;
-                app.runner.focus = Some(InputFocus::Command);
-            }
-            _ => {}
-        },
-    }
-}
-
-fn submit_command(app: &mut App) {
-    let cmd = app.runner.input.trim().to_string();
-    if cmd.is_empty() {
-        return;
-    }
-    let Some(host) = app.selected_host() else {
-        app.runner
-            .output
-            .push(OutputLine::System("no host selected".into()));
-        return;
-    };
-    let alias = host.ssh_alias.clone();
-
-    app.runner
-        .output
-        .push(OutputLine::System(format!("$ ssh {alias} '{cmd}'")));
-
-    match spawn_remote(&alias, &cmd) {
-        Ok(handle) => {
-            app.run_handle = Some(handle);
-            app.runner.running = true;
-            app.runner.focus = None;
-            app.runner.exit_code = None;
-            app.runner.input.clear();
-            app.runner.current_alias = Some(alias);
-            app.runner.current_cmd = Some(cmd);
-            app.runner.current_started_at = Some(std::time::Instant::now());
-            app.runner.current_started_at_unix = Some(unix_now());
-        }
-        Err(e) => {
-            app.runner
-                .output
-                .push(OutputLine::System(format!("spawn failed: {e}")));
-        }
-    }
-}
-
-fn unix_now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-}
-
-/// Drop the TUI and run `helm shell open <target>` in the foreground. On
-/// tmux detach / exit, we re-enter the TUI. Uses `current_exe()` so a
-/// non-PATH helm binary (e.g. dev `target/release/helm`) hands off to
-/// itself rather than `$PATH`'s helm.
-fn run_shell_session(terminal: &mut Term, app: &mut App, target: &str) -> Result<()> {
-    restore_terminal(terminal)?;
-
-    let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("helm"));
-    let status = Command::new(exe)
-        .arg("shell")
-        .arg("open")
-        .arg(target)
-        .status();
-
-    enable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        EnterAlternateScreen,
-        EnableMouseCapture
-    )?;
-    terminal.clear()?;
-
-    match status {
-        Ok(s) if s.success() => app.status = format!("shell {target} ok"),
-        Ok(s) => app.status = format!("shell {target} exit {}", s.code().unwrap_or(-1)),
-        Err(e) => app.status = format!("shell {target} failed: {e}"),
-    }
-    Ok(())
 }
