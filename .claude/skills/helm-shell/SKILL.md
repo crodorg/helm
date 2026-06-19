@@ -20,6 +20,11 @@ This is fundamentally different from `helm exec`:
 
 Use `helm shell` when the operator wants to *watch* me work or when shell state matters. Use `helm exec` otherwise.
 
+Two sibling surfaces need no shell at all:
+
+- **Read verbs** — a quick read of fleet state: `helm ls`, `show <host>`, `svc <host>`, `ps <host>`, `ports <host>`, `health`, `dns`, `vultr`, `money`, `logs <host>`, `history`, `activity` (add `--json` for machine output). Lighter than opening a shell just to eyeball state.
+- **Mutating verbs** are operator-only: `helm vultr {reboot,halt,start,snapshot} <id>` and `helm run <key> <host>` refuse without `--yes` and sit off my un-gated surface. I never invoke them — if a mutation is wanted, I narrate intent and let the operator run it.
+
 ---
 
 ## routing: which target a request means
@@ -29,7 +34,7 @@ The operator lives inside tmux, so every request could plausibly be "a pane here
 | operator says | shell runs | transport | operator watches via |
 |---|---|---|---|
 | names a device (`web`, `vps1`, `relay`, …) | that device's tmux | `helm shell` over ssh — always | auto-opened viewport pane here |
-| names a device + "headless" | that device's tmux | `helm shell` over ssh | attaches when they want (`helm <alias>`) |
+| names a device + "headless" | that device's tmux | `helm shell` over ssh | attaches when they want (`helm open <alias>`) |
 | "here", "a pane", "a local shell", or no device named | this machine | raw tmux pane in my window | the pane itself |
 | explicitly `local`, or "outlive the window" | this machine, separate session | `helm shell`, no ssh | see *the `local` escape hatch* |
 
@@ -200,7 +205,7 @@ Rules:
 
 ## viewport panes: watching remote work in-window
 
-When I start helm work on a remote device and `$TMUX_PANE` is set, I open a **viewport pane** by default — a pane in the operator's current window whose only job is showing the remote session live. The operator opts out per-request with "headless"; if `$TMUX_PANE` is unset there's nothing to split into, so I drive headless and tell them how to attach (`helm <alias>`).
+When I start helm work on a remote device and `$TMUX_PANE` is set, I open a **viewport pane** by default — a pane in the operator's current window whose only job is showing the remote session live. The operator opts out per-request with "headless"; if `$TMUX_PANE` is unset there's nothing to split into, so I drive headless and tell them how to attach (`helm open <alias>`).
 
 A viewport is not a here pane — I never type into it. It's spawned with the attach as its pane command, so there isn't even a shell underneath to receive keys:
 
