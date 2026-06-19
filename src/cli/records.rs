@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use super::{fail, parse_read_args, print_json, resolve_host, table, usage};
 use crate::activity;
 use crate::config::{Config, Host, Log, builtin_logs};
-use crate::history::{HistoryStore, RunRecord, RunSource};
+use crate::history::{HistoryStore, LineKind, LineRecord, RunRecord, RunSource};
 
 const DEFAULT_RECORDS: u32 = 50;
 const DEFAULT_LOG_TAIL: u32 = 200;
@@ -24,6 +24,25 @@ pub(super) fn history(args: &[String]) -> ExitCode {
         Ok(s) => s,
         Err(e) => return fail(&format!("history db: {e}")),
     };
+    // `helm history <id>` → one run's detail + full transcript.
+    if let Some(arg) = pa.pos.first() {
+        let Ok(id) = arg.parse::<i64>() else {
+            return usage("usage: helm history [<id>] [-n N] [--json]");
+        };
+        return match store.run_with_lines(id) {
+            Ok(Some((run, lines))) => {
+                if pa.json {
+                    print_json(&run_detail_json(&run, &lines));
+                } else {
+                    print!("{}", render_run_detail(&run, &lines));
+                }
+                ExitCode::SUCCESS
+            }
+            Ok(None) => fail(&format!("no run with id {id}")),
+            Err(e) => fail(&format!("history query: {e}")),
+        };
+    }
+    // No id → list recent runs.
     let n = pa.n.unwrap_or(DEFAULT_RECORDS) as usize;
     let runs = match store.recent_runs(None, n) {
         Ok(r) => r,
@@ -49,6 +68,7 @@ fn history_json(runs: &[RunRecord]) -> Value {
         runs.iter()
             .map(|r| {
                 json!({
+                    "id": r.id,
                     "started_at_unix": r.started_at_unix,
                     "source": source_str(r.source),
                     "alias": r.alias,
@@ -63,12 +83,13 @@ fn history_json(runs: &[RunRecord]) -> Value {
 
 fn render_history(runs: &[RunRecord]) -> String {
     if runs.is_empty() {
-        return "(no history)\n".into();
+        return "(no history — drill into one with `helm history <id>`)\n".into();
     }
     let rows: Vec<Vec<String>> = runs
         .iter()
         .map(|r| {
             vec![
+                r.id.to_string(),
                 fmt_unix_utc(r.started_at_unix),
                 source_str(r.source).to_string(),
                 r.alias.clone(),
@@ -79,8 +100,62 @@ fn render_history(runs: &[RunRecord]) -> String {
         .collect();
     format!(
         "{}\n",
-        table(&["TIME(UTC)", "SOURCE", "ALIAS", "EXIT", "CMD"], &rows)
+        table(
+            &["ID", "TIME(UTC)", "SOURCE", "ALIAS", "EXIT", "CMD"],
+            &rows
+        )
     )
+}
+
+// ── helm history <id> (one run + transcript) ────────────────────────────
+
+fn run_detail_json(run: &RunRecord, lines: &[LineRecord]) -> Value {
+    json!({
+        "id": run.id,
+        "started_at_unix": run.started_at_unix,
+        "source": source_str(run.source),
+        "alias": run.alias,
+        "cmd": run.cmd,
+        "exit": run.exit,
+        "duration_ms": run.duration_ms,
+        "lines": lines
+            .iter()
+            .map(|l| json!({ "kind": l.kind.as_str(), "line": l.line }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn render_run_detail(run: &RunRecord, lines: &[LineRecord]) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("id        {}\n", run.id));
+    out.push_str(&format!(
+        "time      {} UTC\n",
+        fmt_unix_utc(run.started_at_unix)
+    ));
+    out.push_str(&format!("source    {}\n", source_str(run.source)));
+    out.push_str(&format!("alias     {}\n", run.alias));
+    out.push_str(&format!("cmd       {}\n", run.cmd));
+    out.push_str(&format!(
+        "exit      {}\n",
+        run.exit.map(|e| e.to_string()).unwrap_or("-".into())
+    ));
+    if let Some(ms) = run.duration_ms {
+        out.push_str(&format!("duration  {ms} ms\n"));
+    }
+    if lines.is_empty() {
+        out.push_str("\n(no transcript)\n");
+        return out;
+    }
+    out.push_str("\ntranscript:\n");
+    for l in lines {
+        // Tag stderr lines so their origin survives the flattened transcript;
+        // out/system lines print verbatim (they read like the terminal did).
+        match l.kind {
+            LineKind::Err => out.push_str(&format!("  ! {}\n", l.line)),
+            _ => out.push_str(&format!("  {}\n", l.line)),
+        }
+    }
+    out
 }
 
 // ── helm activity ───────────────────────────────────────────────────────
@@ -292,6 +367,70 @@ mod tests {
         assert!(out.contains("web"));
         assert!(out.contains("uptime"));
         assert!(out.contains("2026-05-18"));
+        // The ID column makes runs addressable by `helm history <id>`.
+        assert!(out.lines().next().unwrap().starts_with("ID"));
+    }
+
+    fn detail_lines() -> Vec<LineRecord> {
+        vec![
+            LineRecord {
+                kind: LineKind::System,
+                line: "$ ssh web 'uptime'".into(),
+            },
+            LineRecord {
+                kind: LineKind::Out,
+                line: " 12:00 up 3 days".into(),
+            },
+            LineRecord {
+                kind: LineKind::Err,
+                line: "warning: noisy".into(),
+            },
+            LineRecord {
+                kind: LineKind::System,
+                line: "exit 0".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn render_run_detail_shows_header_and_transcript() {
+        let run = RunRecord {
+            id: 42,
+            source: RunSource::Agent,
+            alias: "web".into(),
+            cmd: "uptime".into(),
+            started_at_unix: 1_779_062_400,
+            exit: Some(0),
+            duration_ms: Some(8),
+        };
+        let lines = detail_lines();
+        let out = render_run_detail(&run, &lines);
+        assert!(out.contains("id        42"));
+        assert!(out.contains("alias     web"));
+        assert!(out.contains("2026-05-18"));
+        assert!(out.contains("$ ssh web 'uptime'"));
+        assert!(out.contains("! warning: noisy")); // stderr tagged
+        // JSON carries every line's kind for machine consumers.
+        let v = run_detail_json(&run, &lines);
+        assert_eq!(v["id"], 42);
+        assert_eq!(v["lines"][2]["kind"], "err");
+        assert_eq!(v["lines"].as_array().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn render_run_detail_handles_empty_transcript() {
+        let run = RunRecord {
+            id: 1,
+            source: RunSource::Operator,
+            alias: "h".into(),
+            cmd: "x".into(),
+            started_at_unix: 0,
+            exit: None,
+            duration_ms: None,
+        };
+        let out = render_run_detail(&run, &[]);
+        assert!(out.contains("(no transcript)"));
+        assert!(out.contains("exit      -"));
     }
 
     #[test]

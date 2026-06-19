@@ -18,7 +18,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 const SCHEMA_VERSION: i64 = 1;
 
@@ -64,11 +64,22 @@ pub enum LineKind {
 }
 
 impl LineKind {
-    fn as_str(&self) -> &'static str {
+    pub(crate) fn as_str(&self) -> &'static str {
         match self {
             LineKind::Out => "out",
             LineKind::Err => "err",
             LineKind::System => "system",
+        }
+    }
+
+    /// Reconstruct from the stored string. The `run_lines.kind` CHECK
+    /// constraint guarantees one of the three values; anything else (a future
+    /// schema, corruption) falls back to `Out` rather than erroring a read.
+    pub(crate) fn parse(s: &str) -> Self {
+        match s {
+            "err" => LineKind::Err,
+            "system" => LineKind::System,
+            _ => LineKind::Out,
         }
     }
 }
@@ -213,6 +224,49 @@ impl HistoryStore {
             out.push(r?);
         }
         Ok(out)
+    }
+
+    /// Fetch one run plus its full transcript (lines in original `seq`
+    /// order). `Ok(None)` when the id is unknown. The reader for
+    /// `helm history <id>` — the consumer that earns keeping full transcripts
+    /// in the DB (`helm exec` / `helm run` write them; this reads them back).
+    pub fn run_with_lines(&self, id: i64) -> Result<Option<(RunRecord, Vec<LineRecord>)>> {
+        let run = self
+            .conn
+            .query_row(
+                "SELECT id, source, alias, cmd, started_at, exit, duration_ms
+                 FROM runs WHERE id = ?1",
+                params![id],
+                |row| {
+                    let source_str: String = row.get(1)?;
+                    Ok(RunRecord {
+                        id: row.get(0)?,
+                        source: RunSource::parse(&source_str).unwrap_or(RunSource::Agent),
+                        alias: row.get(2)?,
+                        cmd: row.get(3)?,
+                        started_at_unix: row.get(4)?,
+                        exit: row.get(5)?,
+                        duration_ms: row.get(6)?,
+                    })
+                },
+            )
+            .optional()?;
+        let Some(run) = run else { return Ok(None) };
+        let mut stmt = self
+            .conn
+            .prepare("SELECT kind, line FROM run_lines WHERE run_id = ?1 ORDER BY seq ASC")?;
+        let rows = stmt.query_map(params![id], |row| {
+            let kind: String = row.get(0)?;
+            Ok(LineRecord {
+                kind: LineKind::parse(&kind),
+                line: row.get(1)?,
+            })
+        })?;
+        let mut lines = Vec::new();
+        for r in rows {
+            lines.push(r?);
+        }
+        Ok(Some((run, lines)))
     }
 
     /// Keep the newest `max_runs` rows; delete the rest (and their lines
@@ -377,6 +431,31 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM run_lines", [], |r| r.get(0))
             .unwrap();
         assert_eq!(total_lines, 3 * 3);
+    }
+
+    #[test]
+    fn run_with_lines_round_trips_then_misses() {
+        let (_d, mut store) = fresh();
+        let id = store
+            .insert_run(
+                RunSource::Agent,
+                "vps1",
+                "uptime",
+                1_779_062_400,
+                Some(0),
+                Some(7),
+                &sample_lines(),
+            )
+            .unwrap();
+        let (run, lines) = store.run_with_lines(id).unwrap().expect("run exists");
+        assert_eq!(run.id, id);
+        assert_eq!(run.alias, "vps1");
+        assert_eq!(run.cmd, "uptime");
+        assert_eq!(run.exit, Some(0));
+        // Transcript comes back in seq order, kinds reconstructed.
+        assert_eq!(lines, sample_lines());
+        // Unknown id → None, not an error.
+        assert!(store.run_with_lines(id + 9_999).unwrap().is_none());
     }
 
     #[test]

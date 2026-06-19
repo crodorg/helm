@@ -109,7 +109,7 @@ pub enum Cmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Recent command history
+    /// Recent command history (history <id> shows one run's transcript)
     History {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
