@@ -3,10 +3,9 @@
 //! Every CLI invocation that an external agent could plausibly trigger
 //! (`helm exec`, `helm shell open/send/read/list/close`) writes one JSON
 //! line to `$XDG_STATE_HOME/helm/activity.jsonl` (or `~/.local/state/helm/`
-//! on Linux, `~/Library/Application Support/helm/` on macOS). The TUI's
-//! AgentTail pane tails this file so the operator can see exactly what
-//! the agent is doing in real time — even sends that don't go through
-//! helm's control socket.
+//! on Linux, `~/Library/Application Support/helm/` on macOS). `helm activity`
+//! reads back the most recent records; the operator can also `tail -f` the
+//! file directly to watch what the agent is doing in real time.
 //!
 //! Design constraints:
 //!

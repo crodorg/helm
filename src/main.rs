@@ -1,24 +1,19 @@
 mod activity;
 mod cli;
 mod config;
-mod engine;
 mod history;
 mod inventory;
-mod ipc;
 mod money;
 mod mosh;
 mod ssh;
 mod tmux;
 mod vultr;
 
-use std::io;
 use std::process::Command;
-use std::time::Duration;
-
-use anyhow::Result;
 
 use crate::config::Config;
-use crate::ipc::protocol::Request as IpcRequest;
+use crate::history::{HistoryStore, LineKind, LineRecord, RunSource};
+use crate::ssh::{RunEvent, RunHandle, spawn_remote};
 
 fn main() -> std::process::ExitCode {
     let argv: Vec<String> = std::env::args().collect();
@@ -41,7 +36,6 @@ fn main() -> std::process::ExitCode {
             run_shell_cli(&shell_args)
         }
         "auth" => run_auth_cli(&argv[2..]),
-        "daemon" => run_daemon_cli(&argv[2..]),
         "--help" | "-h" | "help" => {
             print_help();
             std::process::ExitCode::SUCCESS
@@ -71,8 +65,8 @@ usage:
   helm open <target>            attach a persistent shell to any ssh alias,
                                 host, or IP (e.g. `helm open web`,
                                 `helm open web:deploy`)
-  helm exec <alias> <cmd...>    run a one-shot command on a host through the
-                                running daemon over its control socket
+  helm exec <alias> <cmd...>    run a one-shot command on a host over ssh,
+                                streaming output (recorded to history)
   helm shell <subcommand>       drive a persistent tmux-backed shell session
                                 per VPS (see `helm shell help`)
 
@@ -96,30 +90,7 @@ usage:
 
   helm auth [--load]            verify ssh-agent has every key helm hosts
                                 depend on; exit 0/non-zero (see `helm auth help`)
-  helm daemon [start|stop|status]
-                                run / manage the headless control daemon
-                                (see `helm daemon help`)
   helm help                     this help"
-    );
-}
-
-fn print_daemon_help() {
-    eprintln!(
-        "helm daemon — headless control daemon
-
-The daemon binds helm's control socket and services `helm exec` requests
-so external operators (e.g. AI agents) can drive remote commands. Start
-it before using `helm exec`; only one daemon owns the socket at a time.
-
-usage:
-  helm daemon            run in the foreground (logs to stderr); exits
-                         on SIGINT, SIGTERM, or a Shutdown IPC request
-  helm daemon start      spawn a detached daemon and exit once the
-                         socket is reachable
-  helm daemon stop       ask a running daemon to exit cleanly
-  helm daemon status     exit 0 if a daemon is reachable; 1
-                         otherwise. Prints the responder's version.
-  helm daemon help       this help"
     );
 }
 
@@ -480,11 +451,52 @@ fn run_exec_cli(args: &[String]) -> std::process::ExitCode {
         return std::process::ExitCode::from(2);
     }
     let alias = args[0].clone();
+    if alias.is_empty() {
+        // The old daemon path rejected an empty alias explicitly; without a
+        // guard it would reach `ssh -tt "" cmd` and fail with an opaque
+        // "Could not resolve hostname" / exit 255 instead.
+        eprintln!("helm exec: <alias> must not be empty");
+        return std::process::ExitCode::from(2);
+    }
     let cmd = args[1..].join(" ");
-    let exit = ipc::client::run_capturing(&IpcRequest::Exec {
-        alias: alias.clone(),
-        cmd: cmd.clone(),
-    });
+
+    // Direct ssh spawn — no daemon. Output is captured as it streams so the
+    // full transcript can be persisted to history.db under the `agent`
+    // source, matching what the old daemon engine recorded.
+    let started_at = std::time::Instant::now();
+    let started_at_unix = activity::now_unix() as i64;
+    let mut lines: Vec<LineRecord> = vec![LineRecord {
+        kind: LineKind::System,
+        line: format!("$ ssh {alias} '{cmd}'"),
+    }];
+
+    let exit = match spawn_remote(&alias, &cmd) {
+        Ok(handle) => {
+            let code = drain_exec(handle, &mut lines);
+            lines.push(LineRecord {
+                kind: LineKind::System,
+                line: format!("exit {code}"),
+            });
+            code
+        }
+        Err(e) => {
+            eprintln!("helm: spawn failed: {e}");
+            lines.push(LineRecord {
+                kind: LineKind::System,
+                line: format!("spawn failed: {e}"),
+            });
+            1
+        }
+    };
+
+    persist_exec_run(
+        &alias,
+        &cmd,
+        started_at_unix,
+        exit,
+        started_at.elapsed(),
+        &lines,
+    );
     log_action(
         activity::ActivityKind::Exec,
         &alias,
@@ -493,8 +505,9 @@ fn run_exec_cli(args: &[String]) -> std::process::ExitCode {
         "",
         Some(exit),
     );
+
     // Map any out-of-range exit (including negatives from signal deaths,
-    // which the server reports as -1) to the conventional "command died
+    // which the wait thread reports as -1) to the conventional "command died
     // abnormally" code 130. Wrapping silently to 255 via `as u8` would
     // collide with the legitimate "argument list too long" exit on most
     // shells; 130 ("Ctrl-C") is the closest semantic match to the
@@ -505,6 +518,100 @@ fn run_exec_cli(args: &[String]) -> std::process::ExitCode {
         130
     };
     std::process::ExitCode::from(c)
+}
+
+/// Block on a remote command's event stream, printing output live and
+/// appending every line to `lines` for history persistence. `helm exec` is
+/// the agent surface: there is no TTY or modal to answer an interactive
+/// password prompt, so on `NeedPassword` it closes stdin — the remote
+/// `doas`/`sudo` then gets EOF and fails fast instead of blocking this loop
+/// forever on a PTY read no one will satisfy.
+fn drain_exec(mut handle: RunHandle, lines: &mut Vec<LineRecord>) -> i32 {
+    let mut exit = 1;
+    while let Ok(ev) = handle.rx.recv() {
+        match ev {
+            RunEvent::Out(line) => {
+                println!("{line}");
+                lines.push(LineRecord {
+                    kind: LineKind::Out,
+                    line,
+                });
+            }
+            RunEvent::Err(line) => {
+                eprintln!("{line}");
+                lines.push(LineRecord {
+                    kind: LineKind::Err,
+                    line,
+                });
+            }
+            RunEvent::Partial(text) => lines.push(LineRecord {
+                kind: LineKind::System,
+                line: text,
+            }),
+            RunEvent::NeedPassword => {
+                eprintln!(
+                    "helm: password prompt detected — `helm exec` can't answer it; \
+                     closing input (the command will fail). Use `helm shell open {}` \
+                     for interactive auth.",
+                    handle.alias
+                );
+                handle.close_stdin();
+                lines.push(LineRecord {
+                    kind: LineKind::System,
+                    line: "(password prompt — input closed; command will fail)".into(),
+                });
+            }
+            RunEvent::Done(code) => exit = code,
+            RunEvent::Error(msg) => {
+                eprintln!("helm: {msg}");
+                lines.push(LineRecord {
+                    kind: LineKind::System,
+                    line: format!("error: {msg}"),
+                });
+                exit = 1;
+            }
+        }
+    }
+    exit
+}
+
+/// Best-effort: append one completed `helm exec` run to the history DB under
+/// the `agent` source. A history failure must never change the command's exit
+/// code, so errors are reported to stderr and otherwise swallowed.
+fn persist_exec_run(
+    alias: &str,
+    cmd: &str,
+    started_at_unix: i64,
+    exit: i32,
+    elapsed: std::time::Duration,
+    lines: &[LineRecord],
+) {
+    let mut store = match HistoryStore::open_default() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("helm: warning — could not open history db: {e}");
+            return;
+        }
+    };
+    let duration_ms = i64::try_from(elapsed.as_millis()).ok();
+    if let Err(e) = store.insert_run(
+        RunSource::Agent,
+        alias,
+        cmd,
+        started_at_unix,
+        Some(exit),
+        duration_ms,
+        lines,
+    ) {
+        eprintln!("helm: warning — history insert failed: {e}");
+        return;
+    }
+    // Cap the DB so it doesn't grow unbounded across runs. The daemon engine
+    // used to prune once at startup; with inline exec there is no startup, so
+    // prune after each insert (cheap at this row count).
+    if let Err(e) = store.prune_to(5000) {
+        eprintln!("helm: warning — history prune failed: {e}");
+    }
 }
 
 /// Returns just the label after the `:` for an `alias:label` target, or
@@ -545,8 +652,7 @@ fn log_action(
 
 /// Load ~/.ssh/config according to the cfg's `[ssh_config]` section,
 /// merging the parsed hosts into `cfg` and returning the unmerged list
-/// so the agent check can iterate IdentityFiles. Shared by
-/// `run_auth_cli` and the daemon startup.
+/// so the agent check can iterate IdentityFiles. Used by `run_auth_cli`.
 fn load_ssh_hosts_for(cfg: &mut Config) -> Vec<crate::ssh::sshconfig::SshHost> {
     if !cfg.ssh_config.enabled {
         return Vec::new();
@@ -567,7 +673,7 @@ fn load_ssh_hosts_for(cfg: &mut Config) -> Vec<crate::ssh::sshconfig::SshHost> {
             ssh_hosts
         }
         Err(e) => {
-            tracing::warn!("ssh config {}: {}", p.display(), e);
+            eprintln!("helm: warning — ssh config {}: {}", p.display(), e);
             Vec::new()
         }
     }
@@ -671,197 +777,6 @@ fn run_auth_cli(args: &[String]) -> std::process::ExitCode {
     }
 }
 
-fn run_daemon_cli(args: &[String]) -> std::process::ExitCode {
-    let sub = args.first().map(|s| s.as_str()).unwrap_or("");
-    match sub {
-        "" => run_daemon_foreground_cli(),
-        "start" => run_daemon_start_cli(),
-        "stop" => run_daemon_stop_cli(),
-        "status" => run_daemon_status_cli(),
-        "help" | "--help" | "-h" => {
-            print_daemon_help();
-            std::process::ExitCode::SUCCESS
-        }
-        other => {
-            eprintln!("helm daemon: unknown subcommand `{other}`");
-            print_daemon_help();
-            std::process::ExitCode::from(2)
-        }
-    }
-}
-
-fn run_daemon_foreground_cli() -> std::process::ExitCode {
-    match run_daemon_foreground() {
-        Ok(()) => std::process::ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("helm daemon: {e}");
-            std::process::ExitCode::FAILURE
-        }
-    }
-}
-
-/// Headless engine + IPC server loop: loads config + binds the IPC server,
-/// then drives a small tokio runtime to multiplex signal handling with
-/// periodic engine ticks.
-fn run_daemon_foreground() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_writer(io::stderr)
-        .init();
-
-    let mut cfg = Config::load()?;
-    tmux::set_flags(cfg.tmux_flags());
-    let ssh_hosts = load_ssh_hosts_for(&mut cfg);
-    let agent_status = crate::ssh::agent::check(&ssh_hosts);
-    if let Some(msg) = crate::ssh::agent::render_blocker(&agent_status, &ssh_hosts) {
-        eprintln!("{msg}");
-        std::process::exit(1);
-    }
-
-    let mut engine = crate::engine::Engine::new();
-    match history::HistoryStore::open_default() {
-        Ok(store) => engine.attach_history(store, 100),
-        Err(e) => eprintln!("helm: warning — could not open history db: {e}"),
-    }
-
-    let socket = crate::ipc::socket_path();
-    let handles = crate::ipc::server::start(socket.clone())
-        .map_err(|e| anyhow::anyhow!("bind {} failed: {e}", socket.display()))?;
-    eprintln!(
-        "helm daemon: control socket at {}",
-        handles.guard.socket_path.display()
-    );
-    engine.attach_jobs_rx(handles.jobs_rx);
-    let shutdown_rx = handles.shutdown_rx;
-    // Held across the loop so Drop removes the socket file on clean exit.
-    let _socket_guard = handles.guard;
-
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-
-    rt.block_on(async move {
-        use tokio::signal::unix::{SignalKind, signal};
-        let mut sigterm = signal(SignalKind::terminate())?;
-        let mut sigint = signal(SignalKind::interrupt())?;
-        let mut tick = tokio::time::interval(Duration::from_millis(100));
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            tokio::select! {
-                _ = tick.tick() => {
-                    engine.ingest_jobs(None);
-                    engine.ingest_agent_events();
-                    if shutdown_rx.try_recv().is_ok() {
-                        eprintln!("helm daemon: shutdown via IPC");
-                        break;
-                    }
-                }
-                _ = sigterm.recv() => {
-                    eprintln!("helm daemon: SIGTERM");
-                    break;
-                }
-                _ = sigint.recv() => {
-                    eprintln!("helm daemon: SIGINT");
-                    break;
-                }
-            }
-        }
-        Ok::<_, anyhow::Error>(())
-    })?;
-    Ok(())
-}
-
-fn run_daemon_start_cli() -> std::process::ExitCode {
-    match spawn_detached_daemon() {
-        Ok(pid) => {
-            eprintln!("helm daemon: up (pid {pid})");
-            std::process::ExitCode::SUCCESS
-        }
-        Err(e) => {
-            eprintln!("helm daemon: start failed: {e}");
-            std::process::ExitCode::FAILURE
-        }
-    }
-}
-
-/// Fork-exec a detached copy of this binary in `daemon` foreground mode,
-/// then poll the control socket until it answers Ping (up to 3s). Returns
-/// the child PID on success.
-fn spawn_detached_daemon() -> Result<u32> {
-    let socket = crate::ipc::socket_path();
-    if let Some(v) = crate::ipc::client::ping_socket(&socket)? {
-        return Err(anyhow::anyhow!(
-            "another helm process (v{v}) is already bound to {}",
-            socket.display()
-        ));
-    }
-    let exe = std::env::current_exe()?;
-    let mut cmd = Command::new(exe);
-    cmd.arg("daemon")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    // Detach into a new session so the daemon survives the spawning shell.
-    use std::os::unix::process::CommandExt;
-    unsafe {
-        cmd.pre_exec(|| {
-            // setsid returns -1 on failure, but only fails if the caller is
-            // already a session leader — harmless for our spawn-fresh case.
-            libc::setsid();
-            Ok(())
-        });
-    }
-    let child = cmd.spawn()?;
-    let pid = child.id();
-    let deadline = std::time::Instant::now() + Duration::from_secs(3);
-    while std::time::Instant::now() < deadline {
-        if crate::ipc::client::ping_socket(&socket)?.is_some() {
-            return Ok(pid);
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    Err(anyhow::anyhow!(
-        "daemon spawned (pid {pid}) but socket {} didn't come up in 3s",
-        socket.display()
-    ))
-}
-
-fn run_daemon_stop_cli() -> std::process::ExitCode {
-    let socket = crate::ipc::socket_path();
-    if !socket.exists() {
-        eprintln!("helm daemon: not running");
-        return std::process::ExitCode::SUCCESS;
-    }
-    match crate::ipc::client::shutdown_socket(&socket, Duration::from_secs(3)) {
-        Ok(true) => {
-            eprintln!("helm daemon: stopped");
-            std::process::ExitCode::SUCCESS
-        }
-        Ok(false) => {
-            eprintln!("helm daemon: socket still present after 3s");
-            std::process::ExitCode::FAILURE
-        }
-        Err(e) => {
-            eprintln!("helm daemon: stop failed: {e}");
-            std::process::ExitCode::FAILURE
-        }
-    }
-}
-
-fn run_daemon_status_cli() -> std::process::ExitCode {
-    let socket = crate::ipc::socket_path();
-    match crate::ipc::client::ping_socket(&socket) {
-        Ok(Some(v)) => {
-            println!("running (helm v{v}) at {}", socket.display());
-            std::process::ExitCode::SUCCESS
-        }
-        Ok(None) => {
-            println!("not running");
-            std::process::ExitCode::FAILURE
-        }
-        Err(e) => {
-            eprintln!("helm daemon: status check failed: {e}");
-            std::process::ExitCode::FAILURE
-        }
-    }
-}
+// Daemon / IPC removed in the Phase 4 teardown: `helm exec` now spawns ssh
+// directly (see `run_exec_cli`) and writes history + activity inline, so the
+// headless control socket is gone.

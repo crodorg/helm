@@ -71,15 +71,6 @@ impl LineKind {
             LineKind::System => "system",
         }
     }
-
-    fn parse(s: &str) -> Option<Self> {
-        match s {
-            "out" => Some(Self::Out),
-            "err" => Some(Self::Err),
-            "system" => Some(Self::System),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -224,25 +215,6 @@ impl HistoryStore {
         Ok(out)
     }
 
-    /// All transcript lines for one run, in insertion order.
-    pub fn lines_for(&self, run_id: i64) -> Result<Vec<LineRecord>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT kind, line FROM run_lines WHERE run_id = ?1 ORDER BY seq ASC")?;
-        let rows = stmt.query_map(params![run_id], |row| {
-            let kind_str: String = row.get(0)?;
-            Ok(LineRecord {
-                kind: LineKind::parse(&kind_str).unwrap_or(LineKind::System),
-                line: row.get(1)?,
-            })
-        })?;
-        let mut out = Vec::new();
-        for r in rows {
-            out.push(r?);
-        }
-        Ok(out)
-    }
-
     /// Keep the newest `max_runs` rows; delete the rest (and their lines
     /// via ON DELETE CASCADE).
     pub fn prune_to(&self, max_runs: usize) -> Result<usize> {
@@ -322,28 +294,6 @@ mod tests {
         assert_eq!(r.started_at_unix, 1_779_062_400);
         assert_eq!(r.exit, Some(0));
         assert_eq!(r.duration_ms, Some(123));
-    }
-
-    #[test]
-    fn lines_for_round_trip() {
-        let (_d, mut store) = fresh();
-        let id = store
-            .insert_run(
-                RunSource::Operator,
-                "vps2",
-                "doas rcctl restart httpd",
-                1_779_062_500,
-                Some(1),
-                None,
-                &sample_lines(),
-            )
-            .unwrap();
-        let lines = store.lines_for(id).unwrap();
-        assert_eq!(lines.len(), 3);
-        assert_eq!(lines[0].kind, LineKind::System);
-        assert_eq!(lines[0].line, "$ ssh vps1 'uptime'");
-        assert_eq!(lines[1].kind, LineKind::Out);
-        assert_eq!(lines[2].kind, LineKind::System);
     }
 
     #[test]
@@ -453,9 +403,14 @@ mod tests {
     #[test]
     fn empty_lines_vec_is_valid() {
         let (_d, mut store) = fresh();
-        let id = store
+        store
             .insert_run(RunSource::Agent, "h", "c", 100, Some(0), None, &[])
             .unwrap();
-        assert!(store.lines_for(id).unwrap().is_empty());
+        // No transcript lines were written for this run.
+        let n: i64 = store
+            .conn
+            .query_row("SELECT COUNT(*) FROM run_lines", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
     }
 }

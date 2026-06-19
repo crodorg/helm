@@ -1,1 +1,3 @@
-src/main.rs
+# Grandfathered paths that exceed the size cap (one path per line), flagged as
+# refactor debt each run, never blocking. Empty: main.rs was the last entry and
+# dropped under the cap when the TUI/daemon were removed (Phase 3–4).
