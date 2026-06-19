@@ -22,7 +22,7 @@ Use `helm shell` when the operator wants to *watch* me work or when shell state 
 
 Two sibling surfaces need no shell at all:
 
-- **Read verbs** — a quick read of fleet state: `helm ls`, `show <host>`, `svc <host>`, `ps <host>`, `ports <host>`, `health`, `dns`, `vultr`, `money`, `logs <host>`, `history`, `activity` (add `--json` for machine output). Lighter than opening a shell just to eyeball state.
+- **Read verbs** — a quick read of fleet state: `helm ls`, `show <host>`, `svc <host>`, `ps <host>`, `ports <host>`, `vultr`, `logs <host>`, `history [<id>]` (bare lists recent `helm exec` runs; with an id, prints that run's full transcript), `activity` (add `--json` for machine output). Lighter than opening a shell just to eyeball state.
 - **Mutating verbs** are operator-only: `helm vultr {reboot,halt,start,snapshot} <id>` and `helm run <key> <host>` refuse without `--yes` and sit off my un-gated surface. I never invoke them — if a mutation is wanted, I narrate intent and let the operator run it.
 
 ---

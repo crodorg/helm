@@ -28,5 +28,12 @@ hostname = "192.0.2.1"
 user = "admin"
 notes = "OpenBSD edge gateway"
 
+# A business links a domain to the host it runs on; `helm show <host>` lists them.
+[[businesses]]
+name = "example.org"
+primary_domain = "example.org"
+host = "web"
+notes = "Marketing site"
+
 [ssh_config]
 enabled = false
