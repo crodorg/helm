@@ -338,7 +338,7 @@ mod tests {
                 identity_file: Some(PathBuf::from("/home/user/.ssh/id_ed25519_vps")),
             },
             SshHost {
-                alias: "desktop".into(),
+                alias: "workstation".into(),
                 hostname: Some("192.168.1.31".into()),
                 user: Some("admin".into()),
                 port: None,

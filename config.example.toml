@@ -17,13 +17,13 @@
 # attach businesses/notes to a host.
 
 [[hosts]]
-name = "router"
-ssh_alias = "router"          # entry in ~/.ssh/config
+name = "relay"
+ssh_alias = "relay"           # entry in ~/.ssh/config
 provider = "local"            # local | vultr | buyvm | unknown — labels only; no API integration for buyvm
-os = "openbsd"                # openbsd | linux | macos — drives the Services pane
+os = "openbsd"                # openbsd | linux | macos — selects the service backend (helm svc)
 hostname = "192.168.1.1"
 user = "admin"
-notes = "OpenBSD edge router"
+notes = "OpenBSD edge gateway"
 
 [[hosts]]
 name = "web"
@@ -35,7 +35,7 @@ user = "admin"
 mosh = "auto"                 # interactive attach transport: auto (default) |
                              # on | off — also accepts true/false. `auto`
                              # detects remote mosh-server (cached 7d) and uses
-                             # it, else ssh. Only `helm <alias>` / `shell open`
+                             # it, else ssh. Only `helm open` / `shell open`
                              # use it; send/read/exec stay on ssh.
 notes = "OpenBSD application host"
 
@@ -52,14 +52,14 @@ hostname = "linux-app.example.org"
 user = "deploy"
 notes = "Linux (systemd) application host"
 
-# A macOS host — the Services pane uses `launchctl list` (user-domain
-# services only). Useful for laptops you also drive through helm.
+# A macOS host — `helm svc` uses `launchctl list` (user-domain services
+# only). Useful for laptops you also drive through helm.
 [[hosts]]
-name = "mac"
-ssh_alias = "mac"
+name = "laptop"
+ssh_alias = "laptop"
 provider = "local"
 os = "macos"
-hostname = "mac.lan"
+hostname = "laptop.lan"
 user = "you"
 notes = "macOS workstation"
 
@@ -105,20 +105,19 @@ notes = "Marketing site"
 
 # SSH config auto-discovery. Defaults: enabled, ~/.ssh/config, no ignore list.
 # Aliases listed in `ignore` are dropped from the merged host list (useful for
-# noise like alternate-user aliases — e.g. `router-git` for gitolite).
+# noise like alternate-user aliases — e.g. `relay-git` for gitolite).
 
 [ssh_config]
 enabled = true
 # path = "/custom/path/to/ssh_config"
-ignore = ["router-git"]
+ignore = ["relay-git"]
 
 # Per-alias OS overrides for hosts discovered in ~/.ssh/config. Without
-# these, synthesized hosts default to `openbsd` and the Services pane (`s`)
-# would call `rcctl ls` against a mac/linux box and fail. Map non-OpenBSD
-# aliases to their actual init system. Explicit `[[hosts]].os` always wins
-# over this map.
+# these, synthesized hosts default to `openbsd` and `helm svc` would call
+# `rcctl ls` against a macOS/Linux box and fail. Map non-OpenBSD aliases to
+# their actual init system. Explicit `[[hosts]].os` always wins over this map.
 [ssh_config.os]
-mac = "macos"
+laptop = "macos"
 linux-vps = "linux"
 
 # Shortcuts — quick-fire remote commands. Press `a` from Browse to open the

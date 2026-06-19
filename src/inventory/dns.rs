@@ -244,7 +244,7 @@ mod tests {
     #[test]
     fn verdict_unknown_when_expected_is_dns_name_not_literal() {
         let mut c = DnsCheck {
-            expected_ip: Some("router.example.org".into()),
+            expected_ip: Some("relay.example.org".into()),
             a: vec!["1.2.3.4".into()],
             ..Default::default()
         };

@@ -109,7 +109,7 @@ pub fn shell_quote(s: &str) -> String {
 /// Prefix common Homebrew + MacPorts directories onto `$PATH` for the
 /// remote (or local-via-`sh -c`) shell. Non-interactive ssh sessions on
 /// macOS skip `.zshrc` and never pick up `/opt/homebrew/bin`, so a stock
-/// `ssh <mac> tmux ...` fails with `tmux: command not found` even after
+/// `ssh <laptop> tmux ...` fails with `tmux: command not found` even after
 /// `brew install tmux`. Uses `export` (not the `KEY=value cmd` prefix
 /// form) so compound scripts like `tmux has-session || tmux new-session`
 /// see the augmented PATH on every branch. Idempotent on hosts that

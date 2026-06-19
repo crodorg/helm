@@ -161,7 +161,7 @@ Host *
 
     #[test]
     fn case_insensitive_keys_and_port() {
-        let raw = "host http\n  hostname 1.1.1.1\n  PORT 2222\n";
+        let raw = "host web\n  hostname 203.0.113.1\n  PORT 2222\n";
         let hosts = parse(raw);
         assert_eq!(hosts.len(), 1);
         assert_eq!(hosts[0].port, Some(2222));
@@ -220,7 +220,7 @@ Host real
         // Smoke test against a realistic shape: many blocks, two key files,
         // multi-token Host line, ControlMaster directives that should be ignored.
         let raw = "\
-Host desktop
+Host workstation
     HostName 192.168.1.31
     User admin
     IdentityFile ~/.ssh/id_ed25519
@@ -242,7 +242,7 @@ Host app 203.0.113.30
 ";
         let hosts = parse(raw);
         let aliases: Vec<&str> = hosts.iter().map(|h| h.alias.as_str()).collect();
-        assert_eq!(aliases, vec!["desktop", "relay", "web", "app"]);
+        assert_eq!(aliases, vec!["workstation", "relay", "web", "app"]);
         let web = hosts.iter().find(|h| h.alias == "web").unwrap();
         assert_eq!(web.port, Some(44456));
     }

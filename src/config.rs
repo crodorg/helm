@@ -264,13 +264,13 @@ pub struct SshConfigSection {
     #[serde(default)]
     pub ignore: Vec<String>,
     /// Per-alias OS overrides for hosts discovered in ~/.ssh/config. Without
-    /// this, synthesized hosts default to `openbsd`, which means the Services
-    /// pane runs `rcctl ls` against a mac/linux box and fails. Add an entry
+    /// this, synthesized hosts default to `openbsd`, which means `helm svc`
+    /// runs `rcctl ls` against a macOS/Linux box and fails. Add an entry
     /// per non-OpenBSD host to route the dispatcher correctly:
     ///
     /// ```toml
     /// [ssh_config.os]
-    /// mac = "macos"
+    /// laptop = "macos"
     /// linux-vps = "linux"
     /// ```
     ///
@@ -531,7 +531,7 @@ mod tests {
         let mut cfg = Config::default();
         cfg.merge_ssh_hosts(vec![
             SshHost {
-                alias: "router".into(),
+                alias: "relay".into(),
                 hostname: Some("192.168.1.1".into()),
                 user: Some("admin".into()),
                 port: None,
@@ -546,7 +546,7 @@ mod tests {
             },
         ]);
         assert_eq!(cfg.hosts.len(), 2);
-        let r = cfg.hosts.iter().find(|h| h.name == "router").unwrap();
+        let r = cfg.hosts.iter().find(|h| h.name == "relay").unwrap();
         assert_eq!(r.provider, Provider::Local);
         let t = cfg.hosts.iter().find(|h| h.name == "vps1").unwrap();
         assert_eq!(t.provider, Provider::Unknown);
@@ -557,20 +557,20 @@ mod tests {
         let mut cfg: Config = toml::from_str(
             r#"
             [ssh_config]
-            ignore = ["router-git"]
+            ignore = ["relay-git"]
             "#,
         )
         .unwrap();
         cfg.merge_ssh_hosts(vec![
             SshHost {
-                alias: "router-git".into(),
+                alias: "relay-git".into(),
                 hostname: Some("192.168.1.1".into()),
                 user: Some("git".into()),
                 port: None,
                 identity_file: None,
             },
             SshHost {
-                alias: "router".into(),
+                alias: "relay".into(),
                 hostname: Some("192.168.1.1".into()),
                 user: Some("admin".into()),
                 port: None,
@@ -578,7 +578,7 @@ mod tests {
             },
         ]);
         let aliases: Vec<&str> = cfg.hosts.iter().map(|h| h.ssh_alias.as_str()).collect();
-        assert_eq!(aliases, vec!["router"]);
+        assert_eq!(aliases, vec!["relay"]);
     }
 
     #[test]
@@ -586,15 +586,15 @@ mod tests {
         let mut cfg: Config = toml::from_str(
             r#"
             [ssh_config.os]
-            mac = "macos"
+            laptop = "macos"
             linux-vps = "linux"
             "#,
         )
         .unwrap();
         cfg.merge_ssh_hosts(vec![
             SshHost {
-                alias: "mac".into(),
-                hostname: Some("mac.lan".into()),
+                alias: "laptop".into(),
+                hostname: Some("laptop.lan".into()),
                 user: Some("you".into()),
                 port: None,
                 identity_file: None,
@@ -614,8 +614,8 @@ mod tests {
                 identity_file: None,
             },
         ]);
-        let mac = cfg.hosts.iter().find(|h| h.name == "mac").unwrap();
-        assert_eq!(mac.os, OsFamily::Macos);
+        let laptop = cfg.hosts.iter().find(|h| h.name == "laptop").unwrap();
+        assert_eq!(laptop.os, OsFamily::Macos);
         let lin = cfg.hosts.iter().find(|h| h.name == "linux-vps").unwrap();
         assert_eq!(lin.os, OsFamily::Linux);
         let obsd = cfg.hosts.iter().find(|h| h.name == "obsd").unwrap();
@@ -627,23 +627,23 @@ mod tests {
         let mut cfg: Config = toml::from_str(
             r#"
             [[hosts]]
-            name = "mac"
-            ssh_alias = "mac"
+            name = "laptop"
+            ssh_alias = "laptop"
             os = "openbsd"
 
             [ssh_config.os]
-            mac = "macos"
+            laptop = "macos"
             "#,
         )
         .unwrap();
         cfg.merge_ssh_hosts(vec![SshHost {
-            alias: "mac".into(),
-            hostname: Some("mac.lan".into()),
+            alias: "laptop".into(),
+            hostname: Some("laptop.lan".into()),
             user: None,
             port: None,
             identity_file: None,
         }]);
-        let mac = cfg.hosts.iter().find(|h| h.name == "mac").unwrap();
-        assert_eq!(mac.os, OsFamily::Openbsd, "explicit [[hosts]].os wins");
+        let laptop = cfg.hosts.iter().find(|h| h.name == "laptop").unwrap();
+        assert_eq!(laptop.os, OsFamily::Openbsd, "explicit [[hosts]].os wins");
     }
 }

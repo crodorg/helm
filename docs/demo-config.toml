@@ -4,8 +4,6 @@
 # vhs runs `helm`. Real configs (with personal hostnames / IPs) never go
 # anywhere near the recording.
 
-auto_daemon = false
-
 [[hosts]]
 name = "web"
 ssh_alias = "web"
@@ -23,12 +21,12 @@ user = "admin"
 notes = "OpenBSD database host"
 
 [[hosts]]
-name = "router"
-ssh_alias = "router"
+name = "relay"
+ssh_alias = "relay"
 provider = "local"
 hostname = "192.0.2.1"
 user = "admin"
-notes = "OpenBSD edge router"
+notes = "OpenBSD edge gateway"
 
 [ssh_config]
 enabled = false
