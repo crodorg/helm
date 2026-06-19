@@ -3,13 +3,11 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust 2024](https://img.shields.io/badge/edition-2024-dea584.svg)](https://doc.rust-lang.org/edition-guide/rust-2024/)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20OpenBSD-lightgrey.svg)](#)
-[![Status](https://img.shields.io/badge/status-v0.1-orange.svg)](#)
+[![Status](https://img.shields.io/badge/status-v0.2-orange.svg)](#)
 
-A Rust CLI that lets an AI agent and a human drive the *same* tmux session — local or ssh-remote — with the discipline baked in so neither side breaks the other. Plus a TUI for managing the fleet of hosts those sessions live on.
+A Rust CLI that lets an AI agent and a human drive the *same* tmux session — local or ssh-remote — with the discipline baked in so neither side breaks the other. Plus a handful of read-only verbs for inspecting the fleet of hosts those sessions live on.
 
-**Status:** v0.1. Sessions pane, daemon, audit log, and the four-primitive agent surface ship today. Linux + macOS + OpenBSD supported.
-
-![helm demo — sessions pane + detached-ensure](docs/demo.gif)
+**Status:** v0.2. The shared-shell agent surface, one-shot `helm exec`, the fleet-inspection verbs, and an append-only audit log ship today. Linux + macOS + OpenBSD supported.
 
 ## Why
 
@@ -45,16 +43,16 @@ ln -s "$PWD/target/release/helm" ~/.local/bin/helm
 Open a shared tmux session against any host (or your own machine via the reserved `local` alias):
 
 ```sh
-helm shell open mac              # attach (creates if missing)
-helm shell open -d mac:deploy    # ensure exists, stay detached
-helm shell list mac              # list helm-* sessions on mac
-helm shell read mac              # capture current pane scrollback
-helm shell send mac 'uptime'     # type a line + press Enter
+helm shell open web              # attach (creates if missing)
+helm shell open -d web:deploy    # ensure exists, stay detached
+helm shell list web              # list helm-* sessions on web
+helm shell read web              # capture current pane scrollback
+helm shell send web 'uptime'     # type a line + press Enter
 ```
 
 That's the full agent surface. `<target>` is `<alias>` or `<alias>:<label>`. The reserved alias `local` short-circuits ssh and uses the operator's own tmux server.
 
-For interactive use, `helm <target>` is shorthand for `helm shell open <target>` — `helm router`, `helm web:deploy`, or any IP / `~/.ssh/config` host attaches a persistent shell in one word.
+For interactive use, `helm open <target>` is shorthand for `helm shell open <target>` — `helm open web`, `helm open web:deploy`, or any IP / `~/.ssh/config` host attaches a persistent shell in one word.
 
 ## The four primitives
 
@@ -67,19 +65,13 @@ For interactive use, `helm <target>` is shorthand for `helm shell open <target>`
 | `helm shell list <alias>` | List `helm-*` sessions on that alias's tmux server. |
 | `helm shell close <target>` | Kill the session. |
 
-`helm shell` is fundamentally different from `helm exec <alias> <cmd>`, which is one-shot and stateless. `helm shell` retains cwd, env, history, and in-progress prompts across calls; `helm exec` runs and exits.
+`helm shell` is fundamentally different from `helm exec <alias> <cmd>`, which is one-shot and stateless. `helm shell` retains cwd, env, history, and in-progress prompts across calls; `helm exec` runs ssh once, streams the output, records it, and exits.
 
 ## Prior art
 
-| | CLI binary | Skill (encoded) | ssh-remote | Refuses passwords | Sidekick (shared pane) |
-|---|---|---|---|---|---|
-| **helm** | ✓ | ✓ read+narrate+refuse | ✓ | ✓ | ✓ |
-| [mitsuhiko/agent-stuff](https://github.com/mitsuhiko/agent-stuff/blob/main/skills/tmux/SKILL.md) | — (raw tmux) | ✓ read-before-send | indirect | — | ✓ |
-| [bnomei/tmux-mcp](https://github.com/bnomei/tmux-mcp) | — (MCP) | — | ✓ | — | ✓ |
-| [TmuxAI](https://github.com/alvinunreal/tmuxai) | own binary | — | — | — | separate execute pane |
-| Tmux-Orchestrator class | varies | — | spawn-only | — | — (own panes) |
+helm isn't the first tool to hand an agent a persistent shell. [mitsuhiko/agent-stuff](https://github.com/mitsuhiko/agent-stuff/blob/main/skills/tmux/SKILL.md) and [bnomei/tmux-mcp](https://github.com/bnomei/tmux-mcp) wrap tmux behind a skill or an MCP server; [TmuxAI](https://github.com/alvinunreal/tmuxai) ships its own binary with a separate execute pane. Orchestrator-class projects ([Tmux-Orchestrator](https://github.com/absmartly/Tmux-Orchestrator), [awslabs/cli-agent-orchestrator](https://github.com/awslabs/cli-agent-orchestrator), [claude_code_agent_farm](https://github.com/Dicklesworthstone/claude_code_agent_farm), [amux](https://github.com/mixpeek/amux)) solve a different problem: spawning N parallel agents, each in its own pane.
 
-Orchestrator-class projects ([Tmux-Orchestrator](https://github.com/absmartly/Tmux-Orchestrator), [awslabs/cli-agent-orchestrator](https://github.com/awslabs/cli-agent-orchestrator), [claude_code_agent_farm](https://github.com/Dicklesworthstone/claude_code_agent_farm), [amux](https://github.com/mixpeek/amux)) solve a different problem: spawn N parallel agents each in its own pane. helm is sidekick, not swarm.
+helm is a sidekick, not a swarm — one shared pane, a plain CLI binary, and an etiquette the agent reads before it types.
 
 ## Audit log
 
@@ -88,41 +80,42 @@ Every `helm exec` and every `helm shell {open,send,read,list,close}` writes one 
 - Linux/BSD: `$XDG_STATE_HOME/helm/activity.jsonl` (default `~/.local/state/helm/activity.jsonl`)
 - macOS: `~/Library/Application Support/helm/activity.jsonl`
 
-The TUI's **agent activity** pane (`c` from Browse) tails this file: time, exit status, kind, target, command, output preview. Privilege-escalating commands (any `doas` / `sudo` token at the start of a command or after `|` / `&&` / `;`) get a red `[DOAS]` badge. The log is append-only and agent-agnostic — Claude Code, Cursor, Aider, a bash one-liner, all write the same record.
+`helm activity` prints the most recent records — time, exit status, kind, target, command. Each record also carries a privilege-escalation flag, set when a `doas` / `sudo` token appears at the start of a command or after `|` / `&&` / `;`. The log is append-only and agent-agnostic — Claude Code, Cursor, Aider, a bash one-liner, all write the same record.
 
 ```sh
+helm activity -n 50
 tail -f ~/.local/state/helm/activity.jsonl | jq .
 ```
 
-## Daemon
+## Fleet inspection
 
-`helm exec` talks to a control socket. The TUI owns the socket when running; `helm daemon` owns it otherwise. Either way, an agent calling `helm exec` from a separate shell gets the same streamed output, history row, and audit entry.
+helm also inspects the fleet those sessions live on. Each verb reads over ssh and prints a table — add `--json` for machine output:
+
+| Verb | What it shows |
+|---|---|
+| `helm ls` | configured + `~/.ssh/config` hosts |
+| `helm show <host>` | one host's detail + linked businesses |
+| `helm svc <host>` | service inventory (rcctl / systemctl / launchctl) |
+| `helm ps <host> [-n N]` | top processes by CPU |
+| `helm ports <host>` | listening sockets |
+| `helm health` | per-business HTTPS reachability + TLS expiry |
+| `helm dns` | per-business A / AAAA / MX / CAA vs expected IP |
+| `helm vultr` | Vultr instances + monthly cost |
+| `helm money` | Stripe + Mercury balances |
+| `helm logs <host> [key] [-f]` | list or tail a host's logs |
+| `helm history [-n N]` | recent `helm exec` history (SQLite) |
+| `helm activity [-n N]` | recent agent audit log |
+
+Two mutating verbs are operator-only. They refuse without `--yes`, so they never sit on the un-gated agent surface:
 
 ```sh
-helm daemon start    # spawn detached
-helm daemon stop     # ask running daemon to exit
-helm daemon status   # exit 0 if reachable
+helm vultr reboot|halt|start|snapshot <id> --yes
+helm run <key> <host> --yes        # run a configured [[shortcuts]] command on a host
 ```
 
-Coexistence is automatic: opening the TUI shuts down a running daemon; closing the TUI re-spawns one (set `auto_daemon = false` in `config.toml` to opt out). Socket lives at `$XDG_RUNTIME_DIR/helm.sock` (Linux/BSD) or `~/Library/Caches/helm/helm.sock` (macOS).
+### Per-host init system (`helm svc`)
 
-## Fleet TUI
-
-`helm` with no args opens a TUI for the workflow it was originally built for: managing a small fleet of hosts. Browse hosts, run ad-hoc remote commands with a `doas`/`sudo`-prompt-aware password modal, check service health per init system, tail logs, replay past runs from a SQLite history. Press `S` from Browse for the **sessions pane** — a live table of every active `helm shell` session across the fleet, with `Enter` to attach.
-
-### Keys
-
-Browse:
-- `j` / `k` — move; `Enter` — interactive ssh; `q` / `Esc` — quit
-- `r` — runner; `s` — services; `S` — sessions; `p` — processes; `l` — logs; `t` — history; `a` — shortcuts; `c` — agent activity
-- `?` — in-TUI help for the current pane
-- `F5` — reload `config.toml`; `R` — refresh all overlays
-
-Opt-in panes (off by default — see [`[features]`](#optional-panes-features)): `H` health, `v` vultr, `d` dns, `m` money.
-
-### Services pane / per-host init system
-
-The Services pane is the only inventory pane that diverges across OSes. Tag each host:
+`helm svc` is the one verb whose command diverges across OSes. Tag each host:
 
 ```toml
 [[hosts]]
@@ -130,10 +123,10 @@ ssh_alias = "web"
 os = "openbsd"     # openbsd | linux | macos — defaults to openbsd
 ```
 
-| `os`      | Command helm fires                                                              |
+| `os`      | Command helm fires                                                               |
 |-----------|----------------------------------------------------------------------------------|
-| `openbsd` | three parallel `doas -n rcctl ls {on,started,failed}`                            |
-| `linux`   | `systemctl list-units --type=service --all --no-legend --plain --no-pager`       |
+| `openbsd` | three parallel `doas -n rcctl ls {on,started,failed}`                             |
+| `linux`   | `systemctl list-units --type=service --all --no-legend --plain --no-pager`        |
 | `macos`   | `launchctl list` (user-domain services only)                                     |
 
 `linux` covers any systemd distro. Non-systemd Linux (Void/runit, Alpine/OpenRC) isn't recognized yet. OpenBSD `rcctl ls started|failed` needs root — add three `permit nopass` lines per OpenBSD host:
@@ -144,46 +137,39 @@ permit nopass <user> cmd rcctl args ls started
 permit nopass <user> cmd rcctl args ls failed
 ```
 
-### Optional panes (`[features]`)
+### Verbs that need an external CLI or key
 
-Side panes that depend on external CLIs / API keys. All default to off:
+A few verbs depend on something beyond ssh:
 
-```toml
-[features]
-health = false   # H — HTTPS reachability + TLS expiry per business
-vultr  = false   # v — Vultr instance overlay (needs $VULTR_API_KEY)
-dns    = false   # d — per-business A / AAAA / MX / CAA table
-money  = false   # m — Stripe + Mercury balances (needs pp CLIs)
-```
-
-Disabled panes are hidden from the Browse keys palette **and** the help overlay. The money pane shells out to `stripe-pp-cli` + `mercury-pp-cli` from [printing-press-library](https://github.com/mvanhorn/printing-press-library); bring-your-own works too (helm just expects a binary on `$PATH` printing the Stripe/Mercury balance JSON shape).
+- `helm vultr` needs `$VULTR_API_KEY` (read-only listing; the `reboot/halt/start/snapshot` mutations also use it).
+- `helm money` shells out to `stripe-pp-cli` + `mercury-pp-cli` from [printing-press-library](https://github.com/mvanhorn/printing-press-library). Bring-your-own works too — helm just expects a binary on `$PATH` that prints the Stripe/Mercury balance JSON shape.
 
 ### A "business" in helm
 
-Three optional panes (`health`, `dns`, `money`) iterate `[[businesses]]`. The naming is historical — a business in helm is **any named thing with a domain**: personal site, side project, OSS landing page, a blog. Minimum entry for the health pane:
+`helm health`, `helm dns`, and `helm money` iterate `[[businesses]]`. The naming is historical — a business in helm is **any named thing with a domain**: personal site, side project, OSS landing page, a blog. Minimum entry for the health verb:
 
 ```toml
 [[businesses]]
 name = "my-blog"
 primary_domain = "blog.example.com"
-host = "personal"
+host = "web"
 ```
 
 ## Configuration
 
-If you only use `helm shell` + the agent skill, you don't need a `config.toml`. For the TUI, copy and edit:
+If you only use `helm shell` + the agent skill, you don't need a `config.toml`. For the fleet verbs, copy and edit:
 
 ```sh
 cp config.example.toml ~/.config/helm/config.toml
 ```
 
-Loaded in order: cwd → platform config dir (`~/.config/helm/` Linux/BSD, `~/Library/Application Support/helm/` macOS) → `$XDG_CONFIG_HOME/helm/`. Helm prints the resolved path to stderr on startup. `config.toml` is gitignored.
+Loaded in order: cwd → platform config dir (`~/.config/helm/` Linux/BSD, `~/Library/Application Support/helm/` macOS) → `$XDG_CONFIG_HOME/helm/`. helm prints the resolved path to stderr when it loads config. `config.toml` is gitignored.
 
 Hosts come from `[[hosts]]` entries *and* `~/.ssh/config` Host blocks (wildcards skipped). For ssh-config-discovered hosts that aren't OpenBSD, tag the OS:
 
 ```toml
 [ssh_config.os]
-mac = "macos"
+laptop    = "macos"
 linux-vps = "linux"
 ```
 
@@ -191,34 +177,33 @@ Every tmux invocation helm makes (remote and local) carries the flags from `tmux
 
 ## SSH
 
-Helm shells out to the system `ssh` binary. Requirements:
+helm shells out to the system `ssh` binary. Requirements:
 
 - Every `ssh_alias` must be a Host entry in `~/.ssh/config`.
 - `ssh-agent` must be loaded — helm has no key-passphrase UI.
 - `ProxyJump`, `IdentityFile`, `Port`, etc. live in `~/.ssh/config`, not in helm.
 
-At startup helm runs `ssh-add -l`, fingerprints each `IdentityFile` referenced by your hosts, and **refuses to open the TUI** if a key isn't loaded. The exact `ssh-add` command is printed to stderr.
-
-`helm auth` exposes the same check standalone (exit 0 OK, 1 missing). `helm auth --load` shells out to `ssh-add <path>` for each missing key.
+`helm auth` checks this explicitly: it runs `ssh-add -l`, fingerprints each `IdentityFile` referenced by your hosts, and exits 0 if every key is loaded, non-zero otherwise — wire it into a login shell or a `doas`/`sudo` wrapper. `helm auth --load` shells out to `ssh-add <path>` for each missing key (it prompts for the passphrase) and re-checks.
 
 ## Layout
 
 ```
 src/
-├── main.rs               event loop, key dispatch
-├── app.rs                App state, Mode/RunnerState, event ingestion
+├── main.rs               CLI dispatch + shell / exec / auth subcommands
+├── cli/                  read verbs (ls/svc/health/…) + the gated mutations
 ├── activity.rs           append-only JSONL audit log
 ├── config.rs             TOML loader, ssh-config merge
+├── history.rs            SQLite-backed exec history
+├── tmux.rs               session naming, ensure_session, list, send-keys, capture
+├── mosh.rs               transport choice (mosh vs ssh) for the attach path
+├── vultr.rs              Vultr API over curl, for the vultr verb
+├── money.rs              Stripe / Mercury balances via the pp CLIs
 ├── ssh/
 │   ├── sshconfig.rs      ~/.ssh/config parser
 │   ├── agent.rs          ssh-agent fingerprint diff
 │   ├── collect.rs        per-OS service / process collectors
 │   └── run.rs            spawn ssh -tt, mpsc stream, password-prompt heuristic
-├── ipc/                  control socket: server (TUI/daemon) + client (helm exec)
-├── tmux.rs               session naming, ensure_session, list, send-keys, capture
-├── inventory/            services / processes / ports / health / dns parsers
-├── history.rs            SQLite-backed run history
-└── ui/                   ratatui draw + per-mode renderers (incl. snapshots)
+└── inventory/            services / processes / ports / health / dns parsers
 ```
 
 ## Testing
@@ -228,12 +213,7 @@ cargo test
 cargo clippy --no-deps --all-targets -- -D warnings
 ```
 
-TUI snapshot tests live under `src/ui/snapshots.rs`. Each renders through `ratatui::backend::TestBackend` and diffs against a fixture. To re-baseline after an intentional UI change:
-
-```sh
-HELM_UPDATE_SNAPSHOTS=1 cargo test ui::snapshots
-git diff src/ui/snapshots/
-```
+Tests are inline `#[cfg(test)]` modules — pure render functions and parsers, exercised without live ssh.
 
 ## License
 
