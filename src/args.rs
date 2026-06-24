@@ -56,6 +56,15 @@ pub enum Cmd {
         )]
         args: Vec<String>,
     },
+    /// Drive panes in helm's own tmux window (open|view|send|key|read|close|list)
+    Pane {
+        #[arg(
+            trailing_var_arg = true,
+            allow_hyphen_values = true,
+            value_name = "SUBCOMMAND"
+        )]
+        args: Vec<String>,
+    },
 
     /// List configured + ssh_config hosts
     Ls {

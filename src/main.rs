@@ -5,6 +5,7 @@ mod config;
 mod history;
 mod inventory;
 mod mosh;
+mod pane;
 mod shell;
 mod ssh;
 mod tmux;
@@ -44,6 +45,7 @@ fn main() -> std::process::ExitCode {
         }
         args::Cmd::Exec { args } => run_exec_cli(&args),
         args::Cmd::Shell { args } => shell::run_cli(&args),
+        args::Cmd::Pane { args } => pane::run_cli(&args),
         args::Cmd::Auth { args } => run_auth_cli(&args),
         _ => unreachable!("read/mutation verbs are handled above"),
     }
