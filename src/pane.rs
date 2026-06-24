@@ -259,17 +259,8 @@ fn ensure_viewport(
     if let Some(p) = find_tagged(win, "@helm_viewport", target)? {
         return Ok(p);
     }
-    let cmd = match std::env::var("SSH_AUTH_SOCK")
-        .ok()
-        .filter(|s| !s.is_empty())
-    {
-        Some(sock) => format!(
-            "SSH_AUTH_SOCK={} helm shell open {}",
-            tmux::shell_quote(&sock),
-            tmux::shell_quote(target)
-        ),
-        None => format!("helm shell open {}", tmux::shell_quote(target)),
-    };
+    let sock = std::env::var("SSH_AUTH_SOCK").ok();
+    let cmd = viewport_command(sock.as_deref(), target);
     let pane = split(anchor, below, size, Some(&cmd))?;
     tmux_act(&["set-option", "-p", "-t", &pane, "@helm_viewport", target])?;
     tmux_act(&["select-pane", "-t", &pane, "-T", target])?;
@@ -469,29 +460,83 @@ fn cmd_list(_args: &[String]) -> Result<ExitCode> {
         "-F",
         "#{pane_id}\t#{@helm_label}\t#{@helm_viewport}",
     ])?;
-    let mut any = false;
-    for line in out.lines() {
+    let rows = render_pane_list(&out);
+    if rows.is_empty() {
+        eprintln!("(no helm panes in this window)");
+    } else {
+        for r in &rows {
+            println!("{r}");
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Build the viewport pane's command: attach the remote session, embedding
+/// helm's current `SSH_AUTH_SOCK` (if any) so the spawned pane's child ssh can
+/// authenticate — it does not inherit helm's env. Pure for testability.
+fn viewport_command(sock: Option<&str>, target: &str) -> String {
+    match sock {
+        Some(s) if !s.is_empty() => format!(
+            "SSH_AUTH_SOCK={} helm shell open {}",
+            tmux::shell_quote(s),
+            tmux::shell_quote(target)
+        ),
+        _ => format!("helm shell open {}", tmux::shell_quote(target)),
+    }
+}
+
+/// Render `list-panes` output (`pane_id<TAB>@helm_label<TAB>@helm_viewport`)
+/// into `name<TAB>kind<TAB>pane_id` rows, skipping untagged panes. Pure.
+fn render_pane_list(raw: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in raw.lines() {
         let mut it = line.splitn(3, '\t');
         let id = it.next().unwrap_or("");
         let label = it.next().unwrap_or("");
         let view = it.next().unwrap_or("");
         if !label.is_empty() {
-            println!("{label}\tdrivable\t{id}");
-            any = true;
+            out.push(format!("{label}\tdrivable\t{id}"));
         } else if !view.is_empty() {
-            println!("{view}\tviewport\t{id}");
-            any = true;
+            out.push(format!("{view}\tviewport\t{id}"));
         }
     }
-    if !any {
-        eprintln!("(no helm panes in this window)");
-    }
-    Ok(ExitCode::SUCCESS)
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn viewport_command_embeds_socket_when_present() {
+        assert_eq!(
+            viewport_command(Some("/tmp/a.sock"), "web"),
+            "SSH_AUTH_SOCK=/tmp/a.sock helm shell open web"
+        );
+        // Empty / absent socket → no SSH_AUTH_SOCK prefix.
+        assert_eq!(viewport_command(Some(""), "web"), "helm shell open web");
+        assert_eq!(viewport_command(None, "web"), "helm shell open web");
+        // A target with a label is quoted intact.
+        assert_eq!(
+            viewport_command(None, "web:diag"),
+            "helm shell open web:diag"
+        );
+    }
+
+    #[test]
+    fn render_pane_list_keeps_only_tagged_panes() {
+        let raw = "%0\t\t\n%1\thelm\t\n%2\t\tweb\n%3\thelm-logs\t\n";
+        let rows = render_pane_list(raw);
+        assert_eq!(
+            rows,
+            vec![
+                "helm\tdrivable\t%1".to_string(),
+                "web\tviewport\t%2".to_string(),
+                "helm-logs\tdrivable\t%3".to_string(),
+            ]
+        );
+        assert!(render_pane_list("").is_empty());
+    }
 
     #[test]
     fn label_tag_maps_like_the_skill() {
@@ -540,6 +585,16 @@ mod tests {
     fn parse_opts_rejects_missing_value() {
         let a: Vec<String> = vec!["-l".to_string()];
         assert!(parse_opts(&a).is_err());
+    }
+
+    #[test]
+    fn parse_opts_rejects_bad_numbers() {
+        let bad_size: Vec<String> = ["--size", "x"].iter().map(|s| s.to_string()).collect();
+        assert!(parse_opts(&bad_size).is_err());
+        let bad_n: Vec<String> = ["-n", "nope"].iter().map(|s| s.to_string()).collect();
+        assert!(parse_opts(&bad_n).is_err());
+        let missing: Vec<String> = vec!["--size".to_string()];
+        assert!(parse_opts(&missing).is_err());
     }
 
     #[test]

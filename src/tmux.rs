@@ -294,7 +294,39 @@ pub fn run_command(target: &str, cmd: &str, timeout_secs: u32) -> Result<RunOutc
     let q_busy = shell_quote(&format!("{tag}:busy:"));
     let q_gone = shell_quote(&format!("{tag}:gone:"));
     let iters = timeout_secs.max(1) * 5; // 0.2s poll period
-    let script = format!(
+    let script = build_run_script(
+        &tmux, &q_session, &q_payload, &q_grep, &q_busy, &q_gone, iters,
+    );
+    let out = runner_cmd(&alias, &script)
+        .output()
+        .context("spawn tmux run runner")?;
+    if !out.status.success() {
+        return Err(anyhow!(
+            "`helm shell run` on {alias} failed (exit {}): {}",
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    let captured = String::from_utf8_lossy(&out.stdout).into_owned();
+    Ok(extract_run(&captured, &tag))
+}
+
+/// Assemble the single remote `sh` script `run_command` ships: ensure the
+/// session, busy-guard at a prompt, send the payload, poll for the sentinel
+/// (host-side, so one ssh round-trip), and emit the final capture. Split out as
+/// a pure builder so the script's shape is unit-tested without a tmux server.
+/// All `q_*` args are already shell-quoted by the caller.
+#[allow(clippy::too_many_arguments)]
+fn build_run_script(
+    tmux: &str,
+    q_session: &str,
+    q_payload: &str,
+    q_grep: &str,
+    q_busy: &str,
+    q_gone: &str,
+    iters: u32,
+) -> String {
+    format!(
         "{tmux} has-session -t {q_session} 2>/dev/null || \
            {tmux} new-session -d -x 200 -y 50 -s {q_session}; \
          sleep 0.3; \
@@ -309,19 +341,7 @@ pub fn run_command(target: &str, cmd: &str, timeout_secs: u32) -> Result<RunOutc
          done; \
          {tmux} has-session -t {q_session} 2>/dev/null || {{ printf '%s\\n' {q_gone}; exit 0; }}; \
          {tmux} capture-pane -t {q_session} -p -S -500"
-    );
-    let out = runner_cmd(&alias, &script)
-        .output()
-        .context("spawn tmux run runner")?;
-    if !out.status.success() {
-        return Err(anyhow!(
-            "`helm shell run` on {alias} failed (exit {}): {}",
-            out.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    let captured = String::from_utf8_lossy(&out.stdout).into_owned();
-    Ok(extract_run(&captured, &tag))
+    )
 }
 
 /// Pure parser: pull the command's output and exit code out of the wrapper's
@@ -648,6 +668,28 @@ mod tests {
     }
 
     #[test]
+    fn build_run_script_has_the_expected_shape() {
+        let s = build_run_script(
+            "tmux -u",
+            "helm",
+            "'payload'",
+            "'t:[0-9]'",
+            "'t:busy:'",
+            "'t:gone:'",
+            150,
+        );
+        assert!(s.contains("has-session -t helm"));
+        assert!(s.contains("new-session -d -x 200 -y 50 -s helm"));
+        assert!(s.contains("send-keys -t helm -l -- 'payload'"));
+        assert!(s.contains("send-keys -t helm Enter"));
+        assert!(s.contains("grep -E -q -e 't:[0-9]'"));
+        assert!(s.contains("printf '%s\\n' 't:busy:'"));
+        assert!(s.contains("printf '%s\\n' 't:gone:'"));
+        assert!(s.contains("[ $__i -lt 150 ]"));
+        assert!(s.contains("capture-pane -t helm -p -S -500"));
+    }
+
+    #[test]
     fn extract_run_detects_gone_session() {
         let out = extract_run("__helm_1_0:gone:\n", "__helm_1_0");
         assert!(out.gone);
@@ -665,6 +707,15 @@ mod tests {
         assert_eq!(out.exit, None);
         assert!(!out.busy);
         assert_eq!(out.output, "still working");
+    }
+
+    #[test]
+    fn extract_run_without_echo_line_takes_from_start() {
+        // No echoed printf-format line present — output runs from the top of
+        // the capture to the sentinel.
+        let out = extract_run("hello\nworld\n__helm_1_0:0:\n", "__helm_1_0");
+        assert_eq!(out.output, "hello\nworld");
+        assert_eq!(out.exit, Some(0));
     }
 
     #[test]

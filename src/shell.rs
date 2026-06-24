@@ -216,27 +216,31 @@ fn shell_send(args: &[String]) -> std::process::ExitCode {
     std::process::ExitCode::SUCCESS
 }
 
-fn shell_run(args: &[String]) -> std::process::ExitCode {
-    // helm shell run <target> [--timeout SECS] <cmd...>
-    if args.is_empty() {
-        eprintln!("usage: helm shell run <target> [--timeout SECS] <cmd...>");
-        return std::process::ExitCode::from(2);
-    }
-    let target = &args[0];
+/// Parsed `helm shell run` invocation. Split from `shell_run` so the flag and
+/// validation logic is unit-tested without spawning tmux. `Err` carries the
+/// usage message to print (all are exit-2 argument errors).
+struct RunArgs {
+    target: String,
+    cmd: String,
+    timeout: u32,
+}
+
+const RUN_USAGE: &str = "usage: helm shell run <target> [--timeout SECS] <cmd...>";
+
+fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
+    let target = args.first().ok_or_else(|| RUN_USAGE.to_string())?;
     let mut timeout = tmux::DEFAULT_RUN_TIMEOUT_SECS;
     let mut cmd_parts: Vec<String> = Vec::new();
     let mut i = 1;
     while i < args.len() {
         if args[i] == "--timeout" {
-            let Some(v) = args.get(i + 1) else {
-                eprintln!("helm shell run: --timeout requires a value (seconds)");
-                return std::process::ExitCode::from(2);
-            };
+            let v = args.get(i + 1).ok_or_else(|| {
+                "helm shell run: --timeout requires a value (seconds)".to_string()
+            })?;
             match v.parse::<u32>() {
                 Ok(s) if s > 0 => timeout = s,
                 _ => {
-                    eprintln!("helm shell run: --timeout requires a positive integer");
-                    return std::process::ExitCode::from(2);
+                    return Err("helm shell run: --timeout requires a positive integer".to_string());
                 }
             }
             i += 2;
@@ -247,85 +251,91 @@ fn shell_run(args: &[String]) -> std::process::ExitCode {
     }
     let cmd = cmd_parts.join(" ");
     if cmd.trim().is_empty() {
-        eprintln!("usage: helm shell run <target> [--timeout SECS] <cmd...>");
-        return std::process::ExitCode::from(2);
+        return Err(RUN_USAGE.to_string());
     }
     // A newline would detach the sentinel printf from the command (the shell
-    // submits the first line on its own), so `$?` would report the wrong
-    // exit and the poll could hang. Reject up front.
+    // submits the first line on its own), so `$?` would report the wrong exit
+    // and the poll could hang. Reject up front.
     if cmd.contains('\n') {
-        eprintln!("helm shell run: command must be a single line (no newlines)");
-        return std::process::ExitCode::from(2);
+        return Err("helm shell run: command must be a single line (no newlines)".to_string());
     }
-    let (alias, _) = tmux::parse_target(target);
-    let session_label = tmux_label_from_target(target);
-    match tmux::run_command(target, &cmd, timeout) {
-        Ok(outcome) if outcome.busy => {
-            log_action(
-                activity::ActivityKind::ShellRun,
-                &alias,
-                &session_label,
-                &cmd,
-                "busy",
-                Some(1),
-            );
-            eprintln!(
-                "helm: shell busy (not at a prompt — pager/editor/long command). \
-                 Use `read`/`send`, or `key` for a TUI."
-            );
-            std::process::ExitCode::FAILURE
+    Ok(RunArgs {
+        target: target.clone(),
+        cmd,
+        timeout,
+    })
+}
+
+/// The process exit byte `run` returns: the remote command's own exit for a
+/// completed run (clamped to the 0..=255 a process code occupies), 1 for a
+/// busy or gone session, 124 (the GNU `timeout` convention) for a timeout.
+fn run_exit_byte(outcome: &tmux::RunOutcome) -> u8 {
+    if outcome.busy || outcome.gone {
+        1
+    } else {
+        match outcome.exit {
+            Some(code) => code.clamp(0, 255) as u8,
+            None => 124,
         }
-        Ok(outcome) if outcome.gone => {
-            log_action(
-                activity::ActivityKind::ShellRun,
-                &alias,
-                &session_label,
-                &cmd,
-                "gone",
-                Some(1),
-            );
-            eprintln!(
-                "helm: the command terminated the shell session ({target} is gone). \
-                 Reopen with `helm shell open -d {target}`."
-            );
-            std::process::ExitCode::FAILURE
+    }
+}
+
+fn shell_run(args: &[String]) -> std::process::ExitCode {
+    let RunArgs {
+        target,
+        cmd,
+        timeout,
+    } = match parse_run_args(args) {
+        Ok(p) => p,
+        Err(msg) => {
+            eprintln!("{msg}");
+            return std::process::ExitCode::from(2);
         }
+    };
+    let (alias, _) = tmux::parse_target(&target);
+    let session_label = tmux_label_from_target(&target);
+    match tmux::run_command(&target, &cmd, timeout) {
         Ok(outcome) => {
-            if !outcome.output.is_empty() {
-                println!("{}", outcome.output);
-            }
-            match outcome.exit {
-                Some(code) => {
-                    eprintln!("exit: {code}");
-                    log_action(
-                        activity::ActivityKind::ShellRun,
-                        &alias,
-                        &session_label,
-                        &cmd,
-                        &activity::preview(&outcome.output),
-                        Some(code),
-                    );
-                    // Mirror the command's own exit, clamped to the byte
-                    // range a process exit code occupies (`$?` is 0..=255).
-                    std::process::ExitCode::from(code.clamp(0, 255) as u8)
+            // Per-state narration + audit; the process exit byte is decided
+            // by the pure `run_exit_byte` below.
+            let logged = if outcome.busy {
+                eprintln!(
+                    "helm: shell busy (not at a prompt — pager/editor/long command). \
+                     Use `read`/`send`, or `key` for a TUI."
+                );
+                "busy".to_string()
+            } else if outcome.gone {
+                eprintln!(
+                    "helm: the command terminated the shell session ({target} is gone). \
+                     Reopen with `helm shell open -d {target}`."
+                );
+                "gone".to_string()
+            } else {
+                if !outcome.output.is_empty() {
+                    println!("{}", outcome.output);
                 }
-                None => {
-                    eprintln!(
+                match outcome.exit {
+                    Some(code) => eprintln!("exit: {code}"),
+                    None => eprintln!(
                         "helm: command still running after {timeout}s (timeout). \
                          Poll with `helm shell read {target}`."
-                    );
-                    log_action(
-                        activity::ActivityKind::ShellRun,
-                        &alias,
-                        &session_label,
-                        &cmd,
-                        &activity::preview(&outcome.output),
-                        None,
-                    );
-                    // 124 is the conventional "timed out" exit (GNU timeout).
-                    std::process::ExitCode::from(124)
+                    ),
                 }
-            }
+                activity::preview(&outcome.output)
+            };
+            log_action(
+                activity::ActivityKind::ShellRun,
+                &alias,
+                &session_label,
+                &cmd,
+                &logged,
+                outcome.exit.or(if outcome.busy || outcome.gone {
+                    Some(1)
+                } else {
+                    None
+                }),
+            );
+            std::process::ExitCode::from(run_exit_byte(&outcome))
         }
         Err(e) => {
             log_action(
@@ -382,8 +392,17 @@ fn shell_key(args: &[String]) -> std::process::ExitCode {
     std::process::ExitCode::SUCCESS
 }
 
-fn shell_read(args: &[String]) -> std::process::ExitCode {
-    // helm shell read <target> [-n LINES] [--raw]
+/// Parsed `helm shell read` invocation. Split from `shell_read` for the same
+/// reason as `RunArgs`. `Err` carries the message to print (all exit-2).
+struct ReadArgs {
+    target: String,
+    lines: u32,
+    raw: bool,
+}
+
+const READ_USAGE: &str = "usage: helm shell read <target> [-n LINES] [--raw]";
+
+fn parse_read_args(args: &[String]) -> Result<ReadArgs, String> {
     let mut target: Option<&str> = None;
     let mut lines = tmux::DEFAULT_CAPTURE_LINES;
     let mut raw = false;
@@ -391,17 +410,12 @@ fn shell_read(args: &[String]) -> std::process::ExitCode {
     while i < args.len() {
         match args[i].as_str() {
             "-n" => {
-                let Some(v) = args.get(i + 1) else {
-                    eprintln!("helm shell read: -n requires a positive integer");
-                    return std::process::ExitCode::from(2);
-                };
-                match v.parse::<u32>() {
-                    Ok(parsed) => lines = parsed,
-                    Err(_) => {
-                        eprintln!("helm shell read: -n requires a positive integer");
-                        return std::process::ExitCode::from(2);
-                    }
-                }
+                let v = args
+                    .get(i + 1)
+                    .ok_or_else(|| "helm shell read: -n requires a positive integer".to_string())?;
+                lines = v
+                    .parse()
+                    .map_err(|_| "helm shell read: -n requires a positive integer".to_string())?;
                 i += 2;
             }
             "--raw" => {
@@ -410,21 +424,32 @@ fn shell_read(args: &[String]) -> std::process::ExitCode {
             }
             other => {
                 if target.is_some() {
-                    eprintln!("usage: helm shell read <target> [-n LINES] [--raw]");
-                    return std::process::ExitCode::from(2);
+                    return Err(READ_USAGE.to_string());
                 }
                 target = Some(other);
                 i += 1;
             }
         }
     }
-    let Some(target) = target else {
-        eprintln!("usage: helm shell read <target> [-n LINES] [--raw]");
-        return std::process::ExitCode::from(2);
+    let target = target.ok_or_else(|| READ_USAGE.to_string())?;
+    Ok(ReadArgs {
+        target: target.to_string(),
+        lines,
+        raw,
+    })
+}
+
+fn shell_read(args: &[String]) -> std::process::ExitCode {
+    let ReadArgs { target, lines, raw } = match parse_read_args(args) {
+        Ok(p) => p,
+        Err(msg) => {
+            eprintln!("{msg}");
+            return std::process::ExitCode::from(2);
+        }
     };
-    let (alias, _) = tmux::parse_target(target);
-    let session_label = tmux_label_from_target(target);
-    if let Err(e) = tmux::ensure_session(target) {
+    let (alias, _) = tmux::parse_target(&target);
+    let session_label = tmux_label_from_target(&target);
+    if let Err(e) = tmux::ensure_session(&target) {
         log_action(
             activity::ActivityKind::ShellRead,
             &alias,
@@ -436,7 +461,7 @@ fn shell_read(args: &[String]) -> std::process::ExitCode {
         eprintln!("helm: {e}");
         return std::process::ExitCode::FAILURE;
     }
-    match tmux::capture(target, lines) {
+    match tmux::capture(&target, lines) {
         Ok(s) => {
             // Strip the pane's trailing blank padding (a 50-row headless pane
             // is mostly empty) unless the caller asked for the raw capture.
@@ -556,5 +581,103 @@ fn tmux_label_from_target(target: &str) -> String {
     match target.split_once(':') {
         Some((_, label)) => label.to_string(),
         None => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn run_args_basic_joins_command_words() {
+        let r = parse_run_args(&v(&["web", "echo", "hi"])).unwrap();
+        assert_eq!(r.target, "web");
+        assert_eq!(r.cmd, "echo hi");
+        assert_eq!(r.timeout, tmux::DEFAULT_RUN_TIMEOUT_SECS);
+    }
+
+    #[test]
+    fn run_args_timeout_anywhere_after_target() {
+        let r = parse_run_args(&v(&["web", "uptime", "--timeout", "5"])).unwrap();
+        assert_eq!(r.cmd, "uptime");
+        assert_eq!(r.timeout, 5);
+    }
+
+    #[test]
+    fn run_args_label_target_is_preserved() {
+        let r = parse_run_args(&v(&["saas:deploy", "make", "deploy"])).unwrap();
+        assert_eq!(r.target, "saas:deploy");
+        assert_eq!(r.cmd, "make deploy");
+    }
+
+    #[test]
+    fn run_args_rejects_missing_target_and_empty_command() {
+        assert!(parse_run_args(&v(&[])).is_err());
+        assert!(parse_run_args(&v(&["web"])).is_err());
+    }
+
+    #[test]
+    fn run_args_rejects_bad_timeout() {
+        assert!(parse_run_args(&v(&["web", "--timeout", "x", "uptime"])).is_err());
+        assert!(parse_run_args(&v(&["web", "--timeout", "0", "uptime"])).is_err());
+        assert!(parse_run_args(&v(&["web", "uptime", "--timeout"])).is_err());
+    }
+
+    #[test]
+    fn run_args_rejects_newline_command() {
+        // A real argv can carry an embedded newline (e.g. a heredoc paste).
+        let r = parse_run_args(&["web".to_string(), "echo a\necho b".to_string()]);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn run_exit_byte_maps_each_state() {
+        let mk = |exit, busy, gone| tmux::RunOutcome {
+            output: String::new(),
+            exit,
+            busy,
+            gone,
+        };
+        assert_eq!(run_exit_byte(&mk(Some(0), false, false)), 0);
+        assert_eq!(run_exit_byte(&mk(Some(2), false, false)), 2);
+        assert_eq!(run_exit_byte(&mk(Some(300), false, false)), 255); // clamped
+        assert_eq!(run_exit_byte(&mk(None, false, false)), 124); // timeout
+        assert_eq!(run_exit_byte(&mk(None, true, false)), 1); // busy
+        assert_eq!(run_exit_byte(&mk(None, false, true)), 1); // gone
+    }
+
+    #[test]
+    fn label_from_target_extracts_after_colon() {
+        assert_eq!(tmux_label_from_target("web"), "");
+        assert_eq!(tmux_label_from_target("web:deploy"), "deploy");
+        assert_eq!(tmux_label_from_target("local:claude"), "claude");
+    }
+
+    #[test]
+    fn read_args_defaults() {
+        let r = parse_read_args(&v(&["web"])).unwrap();
+        assert_eq!(r.target, "web");
+        assert_eq!(r.lines, tmux::DEFAULT_CAPTURE_LINES);
+        assert!(!r.raw);
+    }
+
+    #[test]
+    fn read_args_flags() {
+        let r = parse_read_args(&v(&["web", "-n", "50", "--raw"])).unwrap();
+        assert_eq!(r.lines, 50);
+        assert!(r.raw);
+    }
+
+    #[test]
+    fn read_args_rejects_bad_and_missing() {
+        assert!(parse_read_args(&v(&["web", "-n", "x"])).is_err());
+        assert!(parse_read_args(&v(&["web", "-n"])).is_err());
+        assert!(parse_read_args(&v(&[])).is_err());
+        // A second positional is ambiguous.
+        assert!(parse_read_args(&v(&["web", "extra"])).is_err());
     }
 }
