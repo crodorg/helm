@@ -183,6 +183,29 @@ helm shells out to the system `ssh` binary. Requirements:
 
 `helm auth` checks this explicitly: it runs `ssh-add -l`, fingerprints each `IdentityFile` referenced by your hosts, and exits 0 if every key is loaded, non-zero otherwise — wire it into a login shell or a `doas`/`sudo` wrapper. `helm auth --load` shells out to `ssh-add <path>` for each missing key (it prompts for the passphrase) and re-checks.
 
+## Remote shell environment
+
+`helm shell` opens a **login shell** on the remote host, so that host's startup files (`~/.profile`, `~/.zprofile`, `~/.bashrc`, …) run at session start — exactly as on a normal login. helm augments only `$PATH` (so brew / MacPorts binaries resolve in a non-interactive ssh shell); every other variable in the session comes from the host's own dotfiles, not from helm.
+
+On a mixed fleet that makes an unguarded Linux-ism in a **shared** dotfile a footgun — it runs on every host, including the ones it doesn't fit. The classic is `XDG_RUNTIME_DIR`:
+
+```sh
+# Linux convention — errors on macOS (no writable /run) and OpenBSD
+XDG_RUNTIME_DIR="/run/user/$(id -u)"
+mkdir -p "$XDG_RUNTIME_DIR"        # mkdir: /run: Read-only file system
+```
+
+Guard host-specific setup on `uname` so it only fires where it belongs:
+
+```sh
+if [ "$(uname)" = Linux ]; then
+    XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    [ -d "$XDG_RUNTIME_DIR" ] || { mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"; }
+fi
+```
+
+helm itself never sets `XDG_RUNTIME_DIR` (or any host env beyond `$PATH`) — the session is the host's own shell, so a fix like this lives in the host's dotfiles, not in helm.
+
 ## Layout
 
 ```
