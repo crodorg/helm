@@ -6,6 +6,7 @@ mod history;
 mod inventory;
 mod mosh;
 mod pane;
+mod runcmd;
 mod shell;
 mod ssh;
 mod tmux;

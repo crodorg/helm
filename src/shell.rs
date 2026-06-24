@@ -6,6 +6,7 @@
 use crate::activity;
 use crate::config::Config;
 use crate::log_action;
+use crate::runcmd;
 use crate::tmux;
 
 fn print_shell_help() {
@@ -229,7 +230,7 @@ const RUN_USAGE: &str = "usage: helm shell run <target> [--timeout SECS] <cmd...
 
 fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
     let target = args.first().ok_or_else(|| RUN_USAGE.to_string())?;
-    let mut timeout = tmux::DEFAULT_RUN_TIMEOUT_SECS;
+    let mut timeout = runcmd::DEFAULT_RUN_TIMEOUT_SECS;
     let mut cmd_parts: Vec<String> = Vec::new();
     let mut i = 1;
     while i < args.len() {
@@ -269,7 +270,7 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
 /// The process exit byte `run` returns: the remote command's own exit for a
 /// completed run (clamped to the 0..=255 a process code occupies), 1 for a
 /// busy or gone session, 124 (the GNU `timeout` convention) for a timeout.
-fn run_exit_byte(outcome: &tmux::RunOutcome) -> u8 {
+fn run_exit_byte(outcome: &runcmd::RunOutcome) -> u8 {
     if outcome.busy || outcome.gone {
         1
     } else {
@@ -294,7 +295,7 @@ fn shell_run(args: &[String]) -> std::process::ExitCode {
     };
     let (alias, _) = tmux::parse_target(&target);
     let session_label = tmux_label_from_target(&target);
-    match tmux::run_command(&target, &cmd, timeout) {
+    match runcmd::run_command(&target, &cmd, timeout) {
         Ok(outcome) => {
             // Per-state narration + audit; the process exit byte is decided
             // by the pure `run_exit_byte` below.
@@ -413,9 +414,15 @@ fn parse_read_args(args: &[String]) -> Result<ReadArgs, String> {
                 let v = args
                     .get(i + 1)
                     .ok_or_else(|| "helm shell read: -n requires a positive integer".to_string())?;
-                lines = v
+                let n: u32 = v
                     .parse()
                     .map_err(|_| "helm shell read: -n requires a positive integer".to_string())?;
+                if n == 0 {
+                    // `-S -0` is the whole visible pane, not "0 lines"; reject so
+                    // the value matches the "positive integer" the message promises.
+                    return Err("helm shell read: -n requires a positive integer".to_string());
+                }
+                lines = n;
                 i += 2;
             }
             "--raw" => {
@@ -468,7 +475,7 @@ fn shell_read(args: &[String]) -> std::process::ExitCode {
             let s = if raw {
                 s
             } else {
-                tmux::strip_trailing_blank(&s)
+                runcmd::strip_trailing_blank(&s)
             };
             log_action(
                 activity::ActivityKind::ShellRead,
@@ -597,7 +604,7 @@ mod tests {
         let r = parse_run_args(&v(&["web", "echo", "hi"])).unwrap();
         assert_eq!(r.target, "web");
         assert_eq!(r.cmd, "echo hi");
-        assert_eq!(r.timeout, tmux::DEFAULT_RUN_TIMEOUT_SECS);
+        assert_eq!(r.timeout, runcmd::DEFAULT_RUN_TIMEOUT_SECS);
     }
 
     #[test]
@@ -636,7 +643,7 @@ mod tests {
 
     #[test]
     fn run_exit_byte_maps_each_state() {
-        let mk = |exit, busy, gone| tmux::RunOutcome {
+        let mk = |exit, busy, gone| runcmd::RunOutcome {
             output: String::new(),
             exit,
             busy,
@@ -676,6 +683,9 @@ mod tests {
     fn read_args_rejects_bad_and_missing() {
         assert!(parse_read_args(&v(&["web", "-n", "x"])).is_err());
         assert!(parse_read_args(&v(&["web", "-n"])).is_err());
+        // -n 0 is rejected: `-S -0` is the whole pane, not zero lines, and the
+        // message promises a positive integer.
+        assert!(parse_read_args(&v(&["web", "-n", "0"])).is_err());
         assert!(parse_read_args(&v(&[])).is_err());
         // A second positional is ambiguous.
         assert!(parse_read_args(&v(&["web", "extra"])).is_err());

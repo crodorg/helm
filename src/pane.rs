@@ -22,7 +22,8 @@ use std::process::{Command, ExitCode, Stdio};
 use anyhow::{Context, Result, anyhow, bail};
 
 use crate::config::Config;
-use crate::tmux::{self, strip_trailing_blank};
+use crate::runcmd::{self, strip_trailing_blank};
+use crate::tmux;
 
 /// The window border format. IDENTICAL to the helm-shell skill's — the
 /// operator's tmux config renders `@helm_label`/`@helm_viewport` with it, so
@@ -50,6 +51,7 @@ pub(crate) fn run_cli(args: &[String]) -> ExitCode {
         "open" => cmd_open(rest),
         "view" => cmd_view(rest),
         "send" => cmd_send(rest),
+        "run" => cmd_run(rest),
         "key" => cmd_key(rest),
         "read" => cmd_read(rest),
         "close" => cmd_close(rest),
@@ -86,6 +88,8 @@ usage:
                                                    read-only viewport for a
                                                    remote helm session
   helm pane send [-l LABEL] <text...>              type a line (auto-Enter)
+  helm pane run  [-l LABEL] <cmd...>               run one command; print its
+   [--timeout SECS]                                output + `exit: N`
   helm pane key  [-l LABEL] <key...>               send raw key specs (Up,
                                                    C-c, Escape; no Enter)
   helm pane read [-l LABEL] [-n N] [--raw]         capture the pane (default
@@ -387,6 +391,78 @@ fn cmd_send(args: &[String]) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// Parse `helm pane run [-l LABEL] [--timeout SECS] <cmd...>`. Pure for tests.
+/// The label is a leading flag only (so a `-` in the body is literal); the
+/// command is single-line and non-interactive, like `helm shell run`.
+fn parse_pane_run(args: &[String]) -> Result<(Option<String>, String, u32)> {
+    let (label, rest) = split_leading_label(args)?;
+    let mut timeout = runcmd::DEFAULT_RUN_TIMEOUT_SECS;
+    let mut cmd_parts: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < rest.len() {
+        if rest[i] == "--timeout" {
+            let val = rest
+                .get(i + 1)
+                .ok_or_else(|| anyhow!("--timeout requires a value (seconds)"))?;
+            timeout = match val.parse::<u32>() {
+                Ok(s) if s > 0 => s,
+                _ => bail!("--timeout requires a positive integer"),
+            };
+            i += 2;
+        } else {
+            cmd_parts.push(rest[i].clone());
+            i += 1;
+        }
+    }
+    let cmd = cmd_parts.join(" ");
+    if cmd.trim().is_empty() {
+        bail!("usage: helm pane run [-l LABEL] [--timeout SECS] <cmd...>");
+    }
+    if cmd.contains('\n') {
+        bail!("helm pane run: command must be a single line (no newlines)");
+    }
+    Ok((label, cmd, timeout))
+}
+
+fn cmd_run(args: &[String]) -> Result<ExitCode> {
+    let (label, cmd, timeout) = parse_pane_run(args)?;
+    let anchor = current_pane()?;
+    let win = window_of(&anchor)?;
+    let tag = label_tag(label.as_deref());
+    let pane = ensure_drivable(&win, &anchor, &tag, false, None)?;
+    let outcome = runcmd::run_in_pane(&pane, &cmd, timeout)?;
+    if outcome.busy {
+        eprintln!(
+            "helm: pane busy (a command/editor/REPL is running, not a shell prompt). \
+             Use `send`/`read`, or `key`."
+        );
+        return Ok(ExitCode::FAILURE);
+    }
+    if outcome.gone {
+        eprintln!(
+            "helm: the command terminated the pane's shell ({tag} is gone). \
+             Reopen with `helm pane open`."
+        );
+        return Ok(ExitCode::FAILURE);
+    }
+    if !outcome.output.is_empty() {
+        println!("{}", outcome.output);
+    }
+    match outcome.exit {
+        Some(code) => {
+            eprintln!("exit: {code}");
+            Ok(ExitCode::from(code.clamp(0, 255) as u8))
+        }
+        None => {
+            eprintln!(
+                "helm: command still running after {timeout}s (timeout). \
+                 Poll with `helm pane read`."
+            );
+            Ok(ExitCode::from(124))
+        }
+    }
+}
+
 fn cmd_key(args: &[String]) -> Result<ExitCode> {
     let (label, rest) = split_leading_label(args)?;
     if rest.is_empty() {
@@ -506,6 +582,32 @@ fn render_pane_list(raw: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_pane_run_reads_label_timeout_and_body() {
+        let a: Vec<String> = ["-l", "logs", "--timeout", "5", "tail", "-f", "x"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (label, cmd, timeout) = parse_pane_run(&a).unwrap();
+        assert_eq!(label.as_deref(), Some("logs"));
+        assert_eq!(cmd, "tail -f x"); // a `-f` in the body is not a flag
+        assert_eq!(timeout, 5);
+
+        let b: Vec<String> = vec!["uptime".to_string()];
+        let (label2, cmd2, t2) = parse_pane_run(&b).unwrap();
+        assert!(label2.is_none());
+        assert_eq!(cmd2, "uptime");
+        assert_eq!(t2, runcmd::DEFAULT_RUN_TIMEOUT_SECS);
+
+        assert!(parse_pane_run(&Vec::new()).is_err());
+        assert!(parse_pane_run(&["a\nb".to_string()]).is_err());
+        let bad: Vec<String> = ["--timeout", "0", "x"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(parse_pane_run(&bad).is_err());
+    }
 
     #[test]
     fn viewport_command_embeds_socket_when_present() {
