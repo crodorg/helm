@@ -92,7 +92,7 @@ helm is a sidekick, not a swarm — one shared pane, a plain CLI binary, and an 
 
 ## Audit log
 
-Every `helm exec` and every `helm shell {open,run,send,key,read,list,close}` writes one JSON line to:
+Every `helm exec`, every `helm shell {open,run,send,key,read,list,close}`, and every `helm pane` action (recorded with alias `pane`) writes one JSON line to:
 
 - Linux/BSD: `$XDG_STATE_HOME/helm/activity.jsonl` (default `~/.local/state/helm/activity.jsonl`)
 - macOS: `~/Library/Application Support/helm/activity.jsonl`

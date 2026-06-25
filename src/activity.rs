@@ -1,7 +1,8 @@
 //! Append-only audit log of agent-driven helm actions.
 //!
 //! Every CLI invocation that an external agent could plausibly trigger
-//! (`helm exec`, `helm shell open/send/read/list/close`) writes one JSON
+//! (`helm exec`, `helm shell open/run/send/key/read/list/close`, and the
+//! same `helm pane` verbs — logged with alias `pane`) writes one JSON
 //! line to `$XDG_STATE_HOME/helm/activity.jsonl` (or `~/.local/state/helm/`
 //! on Linux, `~/Library/Application Support/helm/` on macOS). `helm activity`
 //! reads back the most recent records; the operator can also `tail -f` the
@@ -75,6 +76,34 @@ pub struct ActivityRecord {
     /// `None` while the action is in flight, `Some` once it finishes. CLI
     /// hooks write one record on completion so this is always populated.
     pub exit: Option<i32>,
+}
+
+impl ActivityRecord {
+    /// Build a completed audit record: stamp the runtime metadata (timestamp,
+    /// pid, ppid) and classify `cmd` for privilege escalation. One constructor
+    /// for every surface — `helm exec`, `helm shell`, and `helm pane` — so the
+    /// priv-escalation flag is derived identically no matter who logs.
+    pub fn build(
+        kind: ActivityKind,
+        alias: &str,
+        session: &str,
+        cmd: &str,
+        output_preview: &str,
+        exit: Option<i32>,
+    ) -> Self {
+        ActivityRecord {
+            ts_unix: now_unix(),
+            pid: std::process::id(),
+            ppid: ppid(),
+            kind,
+            alias: alias.to_string(),
+            session: session.to_string(),
+            cmd: cmd.to_string(),
+            output_preview: output_preview.to_string(),
+            has_privilege_escalation: has_privilege_escalation(cmd),
+            exit,
+        }
+    }
 }
 
 /// Resolved helm state directory (`$XDG_STATE_HOME/helm` or the platform
@@ -292,5 +321,38 @@ mod tests {
     #[test]
     fn preview_handles_empty() {
         assert_eq!(preview(""), "");
+    }
+
+    #[test]
+    fn build_flags_privilege_escalation_for_a_pane_run() {
+        // A `helm pane run "doas …"` must carry the escalation flag exactly like
+        // the remote shell does — the gap this constructor closed.
+        let r = ActivityRecord::build(
+            ActivityKind::ShellRun,
+            "pane",
+            "helm-logs",
+            "doas rcctl restart httpd",
+            "",
+            Some(0),
+        );
+        assert_eq!(r.kind, ActivityKind::ShellRun);
+        assert_eq!(r.alias, "pane");
+        assert_eq!(r.session, "helm-logs");
+        assert!(r.has_privilege_escalation);
+        assert_eq!(r.exit, Some(0));
+    }
+
+    #[test]
+    fn build_plain_command_carries_no_escalation_flag() {
+        let r = ActivityRecord::build(
+            ActivityKind::ShellRun,
+            "pane",
+            "helm",
+            "cargo test",
+            "",
+            Some(1),
+        );
+        assert!(!r.has_privilege_escalation);
+        assert_eq!(r.exit, Some(1));
     }
 }

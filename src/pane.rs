@@ -21,9 +21,18 @@ use std::process::{Command, ExitCode, Stdio};
 
 use anyhow::{Context, Result, anyhow, bail};
 
+use crate::activity::ActivityKind;
 use crate::config::Config;
 use crate::runcmd::{self, strip_trailing_blank};
 use crate::tmux;
+
+/// Append one audit record for a pane action, mirroring `helm shell`. Pane work
+/// is local (no ssh), so the alias slot is the literal `pane` and the session
+/// slot is the pane tag; `cmd` carries the command so the privilege-escalation
+/// flag is computed for `run`/`send` just as it is for a remote shell.
+fn log_pane(kind: ActivityKind, tag: &str, cmd: &str, exit: Option<i32>) {
+    crate::log_action(kind, "pane", tag, cmd, "", exit);
+}
 
 /// The window border format. IDENTICAL to the helm-shell skill's — the
 /// operator's tmux config renders `@helm_label`/`@helm_viewport` with it, so
@@ -365,6 +374,7 @@ fn cmd_open(args: &[String]) -> Result<ExitCode> {
     let win = window_of(&anchor)?;
     let tag = label_tag(o.label.as_deref());
     let pane = ensure_drivable(&win, &anchor, &tag, o.below, o.size)?;
+    log_pane(ActivityKind::ShellOpen, &tag, "open", Some(0));
     eprintln!("helm: pane {tag} ready ({pane}) in this window");
     Ok(ExitCode::SUCCESS)
 }
@@ -377,6 +387,12 @@ fn cmd_view(args: &[String]) -> Result<ExitCode> {
     let anchor = current_pane()?;
     let win = window_of(&anchor)?;
     let pane = ensure_viewport(&win, &anchor, target, o.below, o.size)?;
+    log_pane(
+        ActivityKind::ShellOpen,
+        target,
+        &format!("view {target}"),
+        Some(0),
+    );
     eprintln!("helm: viewport for {target} ({pane}) in this window");
     Ok(ExitCode::SUCCESS)
 }
@@ -394,6 +410,7 @@ fn cmd_send(args: &[String]) -> Result<ExitCode> {
     // `--` so a body starting with `-` is literal keys, not a send-keys flag.
     tmux_act(&["send-keys", "-t", &pane, "-l", "--", &text])?;
     tmux_act(&["send-keys", "-t", &pane, "Enter"])?;
+    log_pane(ActivityKind::ShellSend, &tag, &text, Some(0));
     Ok(ExitCode::SUCCESS)
 }
 
@@ -438,6 +455,7 @@ fn cmd_run(args: &[String]) -> Result<ExitCode> {
     let pane = ensure_drivable(&win, &anchor, &tag, false, None)?;
     let outcome = runcmd::run_in_pane(&pane, &cmd, timeout)?;
     if outcome.busy {
+        log_pane(ActivityKind::ShellRun, &tag, &cmd, Some(1));
         eprintln!(
             "helm: pane busy (a command/editor/REPL is running, not a shell prompt). \
              Use `send`/`read`, or `key`."
@@ -445,12 +463,14 @@ fn cmd_run(args: &[String]) -> Result<ExitCode> {
         return Ok(ExitCode::FAILURE);
     }
     if outcome.gone {
+        log_pane(ActivityKind::ShellRun, &tag, &cmd, Some(1));
         eprintln!(
             "helm: the command terminated the pane's shell ({tag} is gone). \
              Reopen with `helm pane open`."
         );
         return Ok(ExitCode::FAILURE);
     }
+    log_pane(ActivityKind::ShellRun, &tag, &cmd, outcome.exit);
     if !outcome.output.is_empty() {
         println!("{}", outcome.output);
     }
@@ -482,6 +502,7 @@ fn cmd_key(args: &[String]) -> Result<ExitCode> {
     v.extend(rest.iter().cloned());
     let refs: Vec<&str> = v.iter().map(String::as_str).collect();
     tmux_act(&refs)?;
+    log_pane(ActivityKind::ShellKey, &tag, &rest.join(" "), Some(0));
     Ok(ExitCode::SUCCESS)
 }
 
@@ -499,6 +520,7 @@ fn cmd_read(args: &[String]) -> Result<ExitCode> {
     } else {
         println!("{}", strip_trailing_blank(&raw_out));
     }
+    log_pane(ActivityKind::ShellRead, &tag, "", Some(0));
     Ok(ExitCode::SUCCESS)
 }
 
@@ -528,6 +550,7 @@ fn cmd_close(args: &[String]) -> Result<ExitCode> {
             let _ = tmux_act(&["set-option", "-w", "-t", &win, "-u", opt]);
         }
     }
+    log_pane(ActivityKind::ShellClose, &tag, "close", Some(0));
     eprintln!("helm: closed pane {tag}");
     Ok(ExitCode::SUCCESS)
 }
@@ -550,6 +573,7 @@ fn cmd_list(_args: &[String]) -> Result<ExitCode> {
             println!("{r}");
         }
     }
+    log_pane(ActivityKind::ShellList, "", "", Some(0));
     Ok(ExitCode::SUCCESS)
 }
 

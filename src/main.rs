@@ -254,18 +254,7 @@ pub(crate) fn log_action(
     output_preview: &str,
     exit: Option<i32>,
 ) {
-    let record = activity::ActivityRecord {
-        ts_unix: activity::now_unix(),
-        pid: std::process::id(),
-        ppid: activity::ppid(),
-        kind,
-        alias: alias.to_string(),
-        session: session.to_string(),
-        cmd: cmd.to_string(),
-        output_preview: output_preview.to_string(),
-        has_privilege_escalation: activity::has_privilege_escalation(cmd),
-        exit,
-    };
+    let record = activity::ActivityRecord::build(kind, alias, session, cmd, output_preview, exit);
     activity::append(&record);
 }
 
