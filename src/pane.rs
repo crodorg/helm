@@ -315,10 +315,16 @@ fn parse_opts(args: &[String]) -> Result<Opts> {
             }
             "-n" => {
                 let v = take_val(args, &mut i, "-n")?;
-                o.lines = Some(
-                    v.parse()
-                        .map_err(|_| anyhow!("-n requires a positive integer"))?,
-                );
+                let n: u32 = v
+                    .parse()
+                    .map_err(|_| anyhow!("-n requires a positive integer"))?;
+                if n == 0 {
+                    // `-S -0` captures the whole visible pane, not "0 lines";
+                    // reject so the value matches the promised positive integer
+                    // (matches `helm shell read`).
+                    return Err(anyhow!("-n requires a positive integer"));
+                }
+                o.lines = Some(n);
             }
             "--raw" => {
                 o.raw = true;
@@ -695,6 +701,10 @@ mod tests {
         assert!(parse_opts(&bad_size).is_err());
         let bad_n: Vec<String> = ["-n", "nope"].iter().map(|s| s.to_string()).collect();
         assert!(parse_opts(&bad_n).is_err());
+        // `-n 0` would become `-S -0` (the whole visible pane), not "0 lines";
+        // reject it like a non-numeric value so the message holds true.
+        let zero_n: Vec<String> = ["-n", "0"].iter().map(|s| s.to_string()).collect();
+        assert!(parse_opts(&zero_n).is_err());
         let missing: Vec<String> = vec!["--size".to_string()];
         assert!(parse_opts(&missing).is_err());
     }
