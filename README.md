@@ -9,7 +9,7 @@ A Rust CLI that lets an AI agent and a human drive the *same* tmux session — l
 
 **Status:** v0.4.0. Two shared-shell surfaces — `helm shell` (a tmux session on any ssh host, or locally) and `helm pane` (a pane in your own tmux window) — plus one-shot `helm exec`, the fleet-inspection verbs, and an append-only audit log. Linux + macOS + OpenBSD supported.
 
-![helm — inspecting a fleet, driving a shared shell, and reading the audit log from one CLI](docs/demo.gif)
+![helm — inspecting a fleet, splitting a drivable pane in your own tmux, running a command for its output and exit code, and reading the audit log — all from one CLI](docs/demo.gif)
 
 ## Why
 
