@@ -3,11 +3,11 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust 2024](https://img.shields.io/badge/edition-2024-dea584.svg)](https://doc.rust-lang.org/edition-guide/rust-2024/)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20OpenBSD-lightgrey.svg)](#)
-[![Status](https://img.shields.io/badge/status-v0.3.0-orange.svg)](#)
+[![Status](https://img.shields.io/badge/status-v0.4.0-orange.svg)](#)
 
-A Rust CLI that lets an AI agent and a human drive the *same* tmux session — local or ssh-remote — with the discipline baked in so neither side breaks the other. Plus a handful of read-only verbs for inspecting the fleet of hosts those sessions live on.
+A Rust CLI that lets an AI agent and a human drive the *same* tmux session — local or ssh-remote — with the discipline baked in so neither side breaks the other. The agent can run a command and read its exit code in one call, send raw keys to drive a full-screen TUI, or split a pane right inside your own tmux window. Plus a handful of read-only verbs for inspecting the fleet of hosts those sessions live on.
 
-**Status:** v0.3.0. The shared-shell agent surface, one-shot `helm exec`, the fleet-inspection verbs, and an append-only audit log ship today. Linux + macOS + OpenBSD supported.
+**Status:** v0.4.0. Two shared-shell surfaces — `helm shell` (a tmux session on any ssh host, or locally) and `helm pane` (a pane in your own tmux window) — plus one-shot `helm exec`, the fleet-inspection verbs, and an append-only audit log. Linux + macOS + OpenBSD supported.
 
 ![helm — inspecting a fleet, driving a shared shell, and reading the audit log from one CLI](docs/demo.gif)
 
@@ -21,7 +21,7 @@ What's missing is a **plain CLI binary form factor** (no MCP server registration
 
 Three rules every interaction obeys. The agent never breaks them, the human doesn't either:
 
-1. **Read before send.** Every action starts with `helm shell read <target>` to confirm the pane is at a clean prompt — not mid-command, not inside `vim`, not staring at a password prompt. Blind sends are forbidden.
+1. **Read before send — or let `run` do the checking.** For interactive or risky work the agent reads first (`helm shell read <target>`) to confirm the pane is at a clean prompt — not mid-command, not inside `vim`, not staring at a password prompt. For a plain non-interactive command it uses `helm shell run`, which verifies the pane is at a shell prompt, runs the command, and hands back its output plus `exit: N` — refusing outright if the pane is busy. Either way, helm never fires a line into a running program by accident.
 2. **Narrate intent before sending.** Two sentences max, in chat, before any keystrokes land. The human has time to interrupt before anything visible happens in the shell.
 3. **Refuse to type passwords.** When `read` shows a `password:` or `passphrase:` line, the agent stops and tells the operator. The human answers in their own attached tmux pane.
 
@@ -47,27 +47,42 @@ Open a shared tmux session against any host (or your own machine via the reserve
 ```sh
 helm shell open web              # attach (creates if missing)
 helm shell open -d web:deploy    # ensure exists, stay detached
-helm shell list web              # list helm-* sessions on web
+helm shell run  web 'uptime'     # run one command, get its output + exit code
 helm shell read web              # capture current pane scrollback
-helm shell send web 'uptime'     # type a line + press Enter
+helm shell send web 'cd /srv'    # type a line + Enter; shell state persists
+helm shell key  web C-c          # send a raw key (no Enter) — drive a TUI
+helm shell list web              # list helm-* sessions on web
 ```
 
-That's the full agent surface. `<target>` is `<alias>` or `<alias>:<label>`. The reserved alias `local` short-circuits ssh and uses the operator's own tmux server.
+`<target>` is `<alias>` or `<alias>:<label>`. The reserved alias `local` short-circuits ssh and uses the operator's own tmux server. For interactive use, `helm open <target>` is shorthand for `helm shell open <target>` — `helm open web`, `helm open web:deploy`, or any IP / `~/.ssh/config` host attaches a persistent shell in one word.
 
-For interactive use, `helm open <target>` is shorthand for `helm shell open <target>` — `helm open web`, `helm open web:deploy`, or any IP / `~/.ssh/config` host attaches a persistent shell in one word.
+When the work is **local and you're already in tmux**, `helm pane` splits a pane right in your current window instead — same verbs, no ssh:
 
-## The four primitives
+```sh
+helm pane open                   # split a drivable shell pane here
+helm pane run 'cargo test'       # run one command, get output + exit code
+helm pane view web               # read-only viewport onto a remote session
+helm pane key C-c                # raw keys into the local pane
+```
 
-| Command | What it does |
+## The surface
+
+Two surfaces, the same verbs. **`helm shell`** drives a tmux *session* on an ssh host (or locally via `local`); **`helm pane`** drives a *pane* in the operator's own tmux window. The agent never touches raw `tmux`.
+
+| `helm shell <target> …` | What it does |
 |---|---|
-| `helm shell open <target>` | Attach this terminal to the session. Creates if missing. |
-| `helm shell open -d <target>` | Same, but stays detached — agent pre-creates a session it intends to drive. |
-| `helm shell read <target>` | Capture scrollback from the active pane. Called *before every send*. |
-| `helm shell send <target> <text>` | Type the line + Enter. Lands in the pane the human is attached to. |
-| `helm shell list <alias>` | List `helm-*` sessions on that alias's tmux server. |
-| `helm shell close <target>` | Kill the session. |
+| `open <target>` | Attach this terminal to the session. Creates if missing. |
+| `open -d <target>` | Same, but stays detached — pre-create a session you intend to drive. |
+| `run <target> <cmd>` | Run one non-interactive command; print its output + `exit: N` in a single ssh round-trip. Refuses if the pane is busy. |
+| `send <target> <text>` | Type the line + Enter. Lands in the pane the human is attached to. |
+| `key <target> <key…>` | Send raw tmux key specs (`Up`, `C-c`, `Escape`) with no Enter — drive a full-screen TUI, including over ssh. |
+| `read <target> [-n N]` | Capture scrollback from the active pane (trailing blanks trimmed; `--raw` keeps them). Called *before every interactive send*. |
+| `list <alias>` | List `helm-*` sessions on that alias's tmux server. |
+| `close <target>` | Kill the session. |
 
-`helm shell` is fundamentally different from `helm exec <alias> <cmd>`, which is one-shot and stateless. `helm shell` retains cwd, env, history, and in-progress prompts across calls; `helm exec` runs ssh once, streams the output, records it, and exits.
+`helm pane` mirrors `open / run / send / key / read / list / close` for a pane in the current window, plus `view <target>` — a **read-only viewport** onto a remote `helm shell` session so the human watches the agent work live (the agent drives the remote through `helm shell` and never types into the viewport). It needs `$TMUX_PANE` (helm must be running inside the operator's tmux); local shell work with no host named defaults here.
+
+Both differ fundamentally from `helm exec <alias> <cmd>`, which is one-shot and stateless. A shell or pane retains cwd, env, history, and in-progress prompts across calls; `helm exec` runs ssh once, streams the output, records it, and exits. Use `run` when you just need a command's result and exit code; use `exec` when the output should stream straight back into the conversation with no session to keep.
 
 ## Prior art
 
@@ -77,7 +92,7 @@ helm is a sidekick, not a swarm — one shared pane, a plain CLI binary, and an 
 
 ## Audit log
 
-Every `helm exec` and every `helm shell {open,send,read,list,close}` writes one JSON line to:
+Every `helm exec` and every `helm shell {open,run,send,key,read,list,close}` writes one JSON line to:
 
 - Linux/BSD: `$XDG_STATE_HOME/helm/activity.jsonl` (default `~/.local/state/helm/activity.jsonl`)
 - macOS: `~/Library/Application Support/helm/activity.jsonl`
@@ -210,12 +225,16 @@ helm itself never sets `XDG_RUNTIME_DIR` (or any host env beyond `$PATH`) — th
 
 ```
 src/
-├── main.rs               CLI dispatch + shell / exec / auth subcommands
+├── main.rs               clap dispatch — routes each verb to its handler
+├── args.rs               clap command definitions
+├── shell.rs              `helm shell` verbs (open/run/send/key/read/list/close)
+├── pane.rs               `helm pane` verbs — drivable panes + viewports in the operator's window
+├── runcmd.rs             the run-sentinel engine: send a command, capture its output + exit code
+├── tmux.rs               thin tmux verbs — ensure_session, send-keys, capture, flags
 ├── cli/                  read verbs (ls/svc/ps/…) + the gated mutations
 ├── activity.rs           append-only JSONL audit log
 ├── config.rs             TOML loader, ssh-config merge
 ├── history.rs            SQLite-backed exec history
-├── tmux.rs               session naming, ensure_session, list, send-keys, capture
 ├── mosh.rs               transport choice (mosh vs ssh) for the attach path
 ├── vultr.rs              Vultr API over curl, for the vultr verb
 ├── ssh/
@@ -229,11 +248,11 @@ src/
 ## Testing
 
 ```sh
-cargo test
-cargo clippy --no-deps --all-targets -- -D warnings
+make check          # the full gate CI runs: fmt, clippy -D warnings, tests, file-size cap, coverage ratchet
+cargo test          # just the tests
 ```
 
-Tests are inline `#[cfg(test)]` modules — pure render functions and parsers, exercised without live ssh.
+Tests are inline `#[cfg(test)]` modules — pure parsers, render functions, and the run-sentinel/arg-parsing logic, exercised without live ssh or tmux. The shell-out layer is kept thin over that tested core.
 
 ## License
 
