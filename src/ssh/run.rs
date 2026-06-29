@@ -69,6 +69,11 @@ pub fn spawn_remote(alias: &str, cmd: &str) -> std::io::Result<RunHandle> {
     } else {
         Command::new("ssh")
             .arg("-tt")
+            // `--` ends ssh option parsing so an alias beginning with `-` can't
+            // be read as an ssh flag (e.g. `-oProxyCommand=…`, which would run a
+            // local command). Aliases come from config / ~/.ssh/config / argv —
+            // all meant to be plain host labels; this is defense-in-depth.
+            .arg("--")
             .arg(alias)
             .arg(cmd)
             .stdin(Stdio::piped())

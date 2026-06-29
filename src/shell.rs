@@ -168,6 +168,12 @@ fn shell_open(args: &[String]) -> std::process::ExitCode {
                 .exec(),
             crate::mosh::Transport::Ssh => std::process::Command::new("ssh")
                 .arg("-t")
+                // `--`: end-of-options so a `-`-leading alias isn't an ssh flag
+                // (see ssh::run::spawn_remote). The mosh arm above can't use the
+                // same guard — mosh's `--` marks the start of the remote command,
+                // not end-of-options — but mosh rejects an unknown `-…` host
+                // rather than executing it, so the exposure there is far smaller.
+                .arg("--")
                 .arg(&alias)
                 .arg(&remote)
                 .exec(),

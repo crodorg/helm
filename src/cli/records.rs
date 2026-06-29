@@ -286,7 +286,14 @@ fn follow_exec(alias: &str, path: &str, n: u32) -> ExitCode {
     let err = if alias == crate::tmux::LOCAL_ALIAS {
         Command::new("sh").arg("-c").arg(&remote).exec()
     } else {
-        Command::new("ssh").arg("-t").arg(alias).arg(&remote).exec()
+        // `--`: end-of-options so a `-`-leading alias isn't an ssh flag (see
+        // ssh::run::spawn_remote).
+        Command::new("ssh")
+            .arg("-t")
+            .arg("--")
+            .arg(alias)
+            .arg(&remote)
+            .exec()
     };
     fail(&format!("exec tail failed: {err}"))
 }
@@ -297,7 +304,12 @@ fn snapshot(alias: &str, path: &str, n: u32) -> ExitCode {
     let out = if alias == crate::tmux::LOCAL_ALIAS {
         Command::new("sh").arg("-c").arg(&remote).output()
     } else {
-        Command::new("ssh").arg(alias).arg(&remote).output()
+        // `--`: end-of-options (see ssh::run::spawn_remote).
+        Command::new("ssh")
+            .arg("--")
+            .arg(alias)
+            .arg(&remote)
+            .output()
     };
     match out {
         Ok(o) if o.status.success() => {

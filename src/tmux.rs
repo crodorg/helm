@@ -134,7 +134,9 @@ pub(crate) fn runner_cmd(alias: &str, script: &str) -> Command {
         c
     } else {
         let mut c = Command::new("ssh");
-        c.arg(alias).arg(script);
+        // `--` ends ssh option parsing so a `-`-leading alias can't be read as
+        // an ssh flag (e.g. `-oProxyCommand=…`). See `ssh::run::spawn_remote`.
+        c.arg("--").arg(alias).arg(script);
         c
     }
 }
@@ -409,9 +411,11 @@ mod tests {
         let c = runner_cmd("vps1", "tmux has-session -t helm");
         assert_eq!(cmd_program(&c), "ssh");
         let args = cmd_args(&c);
-        assert_eq!(args[0], "vps1");
-        assert!(args[1].contains("tmux has-session -t helm"));
-        assert!(args[1].contains("/opt/homebrew/bin"));
+        // `--` ends ssh option parsing before the alias (W3 hardening).
+        assert_eq!(args[0], "--");
+        assert_eq!(args[1], "vps1");
+        assert!(args[2].contains("tmux has-session -t helm"));
+        assert!(args[2].contains("/opt/homebrew/bin"));
     }
 
     #[test]
@@ -592,7 +596,10 @@ mod tests {
                 prop_assert_eq!(args, vec!["-c".to_string(), expected]);
             } else {
                 prop_assert_eq!(cmd_program(&c), "ssh");
-                prop_assert_eq!(args, vec![alias, expected]);
+                // `--` ends ssh option parsing before the alias (W3 hardening),
+                // so even a `-`-leading alias is delivered as a destination, not
+                // an ssh flag — and the script is still exactly one arg.
+                prop_assert_eq!(args, vec!["--".to_string(), alias, expected]);
             }
         }
     }

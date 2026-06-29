@@ -1,0 +1,35 @@
+# semgrep regression guard for helm's command-injection invariant.
+#
+# Run via `sh scripts/qa.sh semgrep` (or `semgrep --error --config etc/semgrep/ src/`).
+#
+# helm runs arbitrary remote commands by design; the defended invariant is that a
+# *structural* field (session / target / label / path / alias) can never break out
+# of its slot in an `ssh <alias> <script>` / `sh -c <script>` string. Those scripts
+# are built with `format!`, and every structural value interpolated into one MUST go
+# through `tmux::shell_quote` first — the safe code does so via a pre-quoted `{q}` /
+# `{q_session}` variable or by passing `shell_quote(&x)` as a positional `{}` arg.
+#
+# This is a heuristic (semgrep's re2 backend has no Rust dataflow / lookarounds), but
+# it is keyed on the exact shape of the real bug fixed in W2: the `helm shell open`
+# remote-attach path interpolated `{session}` raw into `tmux new-session -A -s {session}`
+# (see decisions.md 2026-06-28). It would have caught that, and stays green on the
+# correctly-quoted code.
+
+rules:
+  - id: tmux-command-bare-structural-interpolation
+    languages: [generic]
+    severity: ERROR
+    paths:
+      include:
+        - "*.rs"
+    message: >
+      A structural field (session/target/label/path) is interpolated raw into a tmux
+      command string on this line, with no shell_quote. Values in tmux/ssh command
+      strings reach a remote shell as `ssh <alias> <script>` / `sh -c <script>`; one
+      containing a space or shell metacharacter would break out of its slot — a command
+      injection. Pre-quote it: `let q = tmux::shell_quote(&x);` then interpolate `{q}`,
+      or pass `tmux::shell_quote(&x)` as a positional `{}` argument. Safe code uses a
+      `q`-prefixed pre-quoted variable or `{}`, never a bare `{session}`/`{target}`.
+      (Regression guard for the W2 `helm shell open` fix; see decisions.md 2026-06-28.)
+    patterns:
+      - pattern-regex: '(new-session|send-keys|capture-pane|kill-session|has-session|list-sessions)[^"\n]*\{(session|target|label|path)\}'
