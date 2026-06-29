@@ -5,6 +5,10 @@ edition = "2024"
 description = "Shared-shell etiquette for AI agents + a CLI for the fleet they live on"
 license = "MIT"
 
+[lib]
+name = "helm"
+path = "src/lib.rs"
+
 [[bin]]
 name = "helm"
 path = "src/main.rs"
@@ -14,7 +18,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
 anyhow = "1"
-thiserror = "2"
 directories = "5"
 libc = "0.2"
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -22,6 +25,7 @@ clap = { version = "4.6.1", default-features = false, features = ["derive", "std
 
 [dev-dependencies]
 tempfile = "3"
+proptest = "1"
 
 [profile.release]
 lto = "thin"

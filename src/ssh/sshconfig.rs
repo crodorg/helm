@@ -21,8 +21,15 @@ pub struct SshHost {
 /// path to compare against `ssh-add -l` output, which prints the agent-side
 /// resolved path, so this is good enough in practice.
 pub fn expand_tilde(p: &str) -> PathBuf {
+    expand_tilde_with_home(p, std::env::var_os("HOME").as_deref())
+}
+
+/// Core of [`expand_tilde`] with `$HOME` injected rather than read from the
+/// process env, so tests can pin it without the data-racy global `set_var`
+/// (concurrent `setenv`/`getenv` is UB).
+fn expand_tilde_with_home(p: &str, home: Option<&std::ffi::OsStr>) -> PathBuf {
     if let Some(rest) = p.strip_prefix("~/")
-        && let Some(home) = std::env::var_os("HOME")
+        && let Some(home) = home
     {
         return PathBuf::from(home).join(rest);
     }
@@ -191,17 +198,24 @@ Host real
     }
 
     #[test]
-    fn parses_identity_file_and_expands_tilde() {
-        // SAFETY: tests are single-threaded by default for unit tests in
-        // separate processes; this only mutates within the test.
-        unsafe {
-            std::env::set_var("HOME", "/tmp/fakehome");
-        }
-        let raw = "Host k\n    IdentityFile ~/.ssh/id_ed25519_vps\n";
-        let hosts = parse(raw);
+    fn expands_leading_tilde_against_injected_home() {
+        // HOME is injected, not mutated globally — concurrent setenv/getenv with
+        // other tests (e.g. the `directories` crate reading HOME) is a data race.
+        // (`parse` wires IdentityFile through `expand_tilde`; that path is
+        // exercised by `parses_realistic_multi_host_config`.)
+        let home = std::ffi::OsStr::new("/tmp/fakehome");
         assert_eq!(
-            hosts[0].identity_file.as_deref(),
-            Some(std::path::Path::new("/tmp/fakehome/.ssh/id_ed25519_vps"))
+            expand_tilde_with_home("~/.ssh/id_ed25519_vps", Some(home)),
+            std::path::Path::new("/tmp/fakehome/.ssh/id_ed25519_vps")
+        );
+        // A non-tilde path is returned verbatim; missing HOME leaves `~/` as-is.
+        assert_eq!(
+            expand_tilde_with_home("/abs/key", Some(home)),
+            std::path::Path::new("/abs/key")
+        );
+        assert_eq!(
+            expand_tilde_with_home("~/x", None),
+            std::path::Path::new("~/x")
         );
     }
 

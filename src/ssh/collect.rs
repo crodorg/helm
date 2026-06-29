@@ -76,6 +76,9 @@ fn collect_rcctl(alias: &str) -> Result<Vec<Service>, String> {
         thread::spawn(move || {
             let sub = slot.subcommand();
             let out = match Command::new("ssh")
+                // `--`: end-of-options so a `-`-leading alias isn't read as an
+                // ssh flag (see ssh::run::spawn_remote).
+                .arg("--")
                 .arg(&alias)
                 .arg(format!("doas -n rcctl ls {sub}"))
                 .output()
@@ -120,7 +123,8 @@ fn run_remote(alias: &str, cmd: &str) -> Result<String, String> {
     let exec = if alias == crate::tmux::LOCAL_ALIAS {
         Command::new("sh").arg("-c").arg(cmd).output()
     } else {
-        Command::new("ssh").arg(alias).arg(cmd).output()
+        // `--`: end-of-options (see ssh::run::spawn_remote).
+        Command::new("ssh").arg("--").arg(alias).arg(cmd).output()
     };
     match exec {
         Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).into_owned()),
@@ -159,7 +163,8 @@ pub fn spawn_processes_and_ports(alias: &str) -> Receiver<InvResult> {
         let cmd = cmd.to_string();
         let tx = tx.clone();
         thread::spawn(move || {
-            let result = match Command::new("ssh").arg(&alias).arg(&cmd).output() {
+            // `--`: end-of-options (see ssh::run::spawn_remote).
+            let result = match Command::new("ssh").arg("--").arg(&alias).arg(&cmd).output() {
                 Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).into_owned()),
                 Ok(o) => Err(format!(
                     "{cmd} exit {}: {}",

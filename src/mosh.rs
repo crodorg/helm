@@ -108,6 +108,9 @@ fn run_probe(alias: &str) -> (i32, bool) {
             "ConnectTimeout=5",
             "-o",
             "BatchMode=yes",
+            // `--`: end-of-options so a `-`-leading alias isn't an ssh flag
+            // (see ssh::run::spawn_remote).
+            "--",
             alias,
             "command -v mosh-server",
         ])

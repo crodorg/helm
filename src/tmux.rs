@@ -134,7 +134,9 @@ pub(crate) fn runner_cmd(alias: &str, script: &str) -> Command {
         c
     } else {
         let mut c = Command::new("ssh");
-        c.arg(alias).arg(script);
+        // `--` ends ssh option parsing so a `-`-leading alias can't be read as
+        // an ssh flag (e.g. `-oProxyCommand=…`). See `ssh::run::spawn_remote`.
+        c.arg("--").arg(alias).arg(script);
         c
     }
 }
@@ -167,6 +169,25 @@ pub fn ensure_session(target: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// Build the remote script that attach-or-creates the session for an
+/// interactive `helm shell open` (used by both the ssh and mosh transports).
+/// `-A` makes `new-session` idempotent (attach if it exists, else create).
+///
+/// The session name is **shell-quoted**: it embeds `helm-<label>` where
+/// `<label>` is the user-controlled half of an `<alias>:<label>` target, and
+/// this script is handed to a remote shell as a single `ssh <alias> <script>`
+/// (or `mosh … sh -c <script>`) string. Without quoting, a label containing a
+/// space or shell metacharacter (`;`, `|`, `$`, …) would break out of its slot
+/// — a command injection. Mirrors the quoting every other tmux helper applies
+/// (`ensure_session`, `kill`, `send_keys`).
+pub(crate) fn attach_session_script(session: &str) -> String {
+    with_remote_path(&format!(
+        "{} new-session -A -s {}",
+        tmux_prefix(),
+        shell_quote(session)
+    ))
 }
 
 /// Send a line of text (followed by Enter) to the session's active pane.
@@ -390,9 +411,11 @@ mod tests {
         let c = runner_cmd("vps1", "tmux has-session -t helm");
         assert_eq!(cmd_program(&c), "ssh");
         let args = cmd_args(&c);
-        assert_eq!(args[0], "vps1");
-        assert!(args[1].contains("tmux has-session -t helm"));
-        assert!(args[1].contains("/opt/homebrew/bin"));
+        // `--` ends ssh option parsing before the alias (W3 hardening).
+        assert_eq!(args[0], "--");
+        assert_eq!(args[1], "vps1");
+        assert!(args[2].contains("tmux has-session -t helm"));
+        assert!(args[2].contains("/opt/homebrew/bin"));
     }
 
     #[test]
@@ -421,5 +444,204 @@ mod tests {
         assert!(s.contains("/opt/homebrew/bin"));
         assert!(s.contains("tmux a || tmux b"));
         assert!(s.contains("; tmux a"));
+    }
+
+    // --- Command-injection regression test for the attach path ---
+
+    #[test]
+    fn attach_session_script_quotes_a_session_with_metachars() {
+        // Regression (hardening W2): the `helm shell open` remote-attach path
+        // used to interpolate the session (`helm-<label>`, user-controlled)
+        // raw, so a label with a space or `;` broke out of the
+        // `ssh <alias> <script>` string. The session must be shell-quoted.
+        let session = "helm-; touch /tmp/pwned";
+        let script = attach_session_script(session);
+        // The dangerous session appears only inside its quoted form…
+        assert!(script.contains("-s 'helm-; touch /tmp/pwned'"), "{script}");
+        // …never as a bare `-s helm-; …` that the remote shell would split on
+        // the `;` and run `touch /tmp/pwned` as a separate command.
+        assert!(!script.contains("-s helm-; touch"), "{script}");
+    }
+
+    // --- Property tests (names contain `prop` so `qa.sh safety` can --skip them
+    //     under the slow miri/sanitizer runs) ---
+
+    use proptest::prelude::*;
+
+    /// An independent POSIX re-parser: collapse a single shell *word* built
+    /// only from single-quoted spans, `\<char>` escapes, and bare literals
+    /// (exactly the alphabet `shell_quote` emits) back to its logical value.
+    /// A second implementation of the inverse, so the round-trip check is a
+    /// real differential, not `shell_quote` checking itself.
+    fn posix_single_unquote(quoted: &str) -> String {
+        let mut out = String::new();
+        let mut chars = quoted.chars();
+        let mut in_single = false;
+        while let Some(c) = chars.next() {
+            if in_single {
+                if c == '\'' {
+                    in_single = false;
+                } else {
+                    out.push(c);
+                }
+            } else {
+                match c {
+                    '\'' => in_single = true,
+                    '\\' => {
+                        if let Some(n) = chars.next() {
+                            out.push(n);
+                        }
+                    }
+                    _ => out.push(c),
+                }
+            }
+        }
+        out
+    }
+
+    /// Strings biased toward shell-significant bytes (plus a few normal and
+    /// non-ASCII chars), excluding NUL (which can't appear in an argv element).
+    fn shellish() -> impl Strategy<Value = String> {
+        proptest::collection::vec(
+            prop_oneof![
+                Just(' '),
+                Just('\t'),
+                Just('\n'),
+                Just(';'),
+                Just('|'),
+                Just('&'),
+                Just('$'),
+                Just('`'),
+                Just('\''),
+                Just('"'),
+                Just('\\'),
+                Just('('),
+                Just(')'),
+                Just('<'),
+                Just('>'),
+                Just('*'),
+                Just('?'),
+                Just('!'),
+                Just('#'),
+                Just('~'),
+                Just('='),
+                Just('a'),
+                Just('Z'),
+                Just('0'),
+                Just('/'),
+                Just('-'),
+                Just('é'),
+                Just('→'),
+            ],
+            0..24,
+        )
+        .prop_map(|cs| cs.into_iter().collect())
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 1024, ..ProptestConfig::default() })]
+        /// The crown jewel: for ANY input, the pure re-parser recovers it
+        /// exactly from `shell_quote`'s output — no metacharacter escapes the
+        /// quoting. Pure (no subprocess), so run it hard.
+        #[test]
+        fn prop_shell_quote_roundtrips_pure(s in shellish()) {
+            prop_assert_eq!(posix_single_unquote(&shell_quote(&s)), s);
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 96, ..ProptestConfig::default() })]
+        /// Differential against a REAL POSIX shell: `printf %s <quoted>` must
+        /// echo the input verbatim. The hardened invariant from the plan — a
+        /// failure here would be an actual injection CVE. Bounded case count
+        /// because each case spawns `sh`.
+        #[test]
+        fn prop_shell_quote_roundtrips_via_sh(s in shellish()) {
+            let script = format!("printf %s {}", shell_quote(&s));
+            let out = Command::new("sh")
+                .arg("-c")
+                .arg(&script)
+                .output()
+                .expect("spawn sh");
+            prop_assert!(out.status.success());
+            prop_assert_eq!(out.stdout, s.into_bytes());
+        }
+    }
+
+    proptest! {
+        /// `parse_target` structural invariants: the alias never carries the
+        /// `:` separator (so it can't smuggle a second label), and the session
+        /// is always the literal `helm` or a `helm-` prefix — never empty,
+        /// never attacker-chosen wholesale.
+        #[test]
+        fn prop_parse_target_invariants(target in shellish()) {
+            let (alias, session) = parse_target(&target);
+            prop_assert!(!alias.contains(':'), "alias leaked a colon: {:?}", alias);
+            prop_assert!(session == "helm" || session.starts_with("helm-"), "{session}");
+        }
+    }
+
+    proptest! {
+        /// `runner_cmd` never lets a script (however hostile) inject an extra
+        /// argv element: it is always exactly `sh -c <script>` or
+        /// `ssh <alias> <script>` — two args, the script delivered verbatim as
+        /// one element (shell interpretation happens later, by design).
+        #[test]
+        fn prop_runner_cmd_never_splits_script(alias in shellish(), script in shellish()) {
+            let c = runner_cmd(&alias, &script);
+            let args = c.get_args().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>();
+            let expected = with_remote_path(&script);
+            if alias == LOCAL_ALIAS {
+                prop_assert_eq!(cmd_program(&c), "sh");
+                prop_assert_eq!(args, vec!["-c".to_string(), expected]);
+            } else {
+                prop_assert_eq!(cmd_program(&c), "ssh");
+                // `--` ends ssh option parsing before the alias (W3 hardening),
+                // so even a `-`-leading alias is delivered as a destination, not
+                // an ssh flag — and the script is still exactly one arg.
+                prop_assert_eq!(args, vec!["--".to_string(), alias, expected]);
+            }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 96, ..ProptestConfig::default() })]
+        /// The fixed attach path: for ANY label, the script delivers exactly
+        /// `helm-<label>` to tmux's `-s` as a single shell word — the label can
+        /// never break out. Verified differentially through a real shell by
+        /// standing in `printf` for the `tmux …` head of the script.
+        #[test]
+        fn prop_attach_session_label_cannot_break_out(label in shellish()) {
+            let (_, session) = parse_target(&format!("vps1:{label}"));
+            let script = attach_session_script(&session);
+            // Strip the `export PATH=…; ` prefix, then stand `printf '%s\0'` in
+            // for the `tmux` head so the shell prints exactly the args tmux
+            // would have received — proving how `-s <session>` tokenizes. A NUL
+            // delimiter keeps a session that itself contains a newline intact.
+            let body = script.strip_prefix(&with_remote_path("")).unwrap();
+            let printf_body = body.replacen(&tmux_prefix(), "printf '%s\\0'", 1);
+            let out = Command::new("sh")
+                .arg("-c")
+                .arg(&printf_body)
+                .output()
+                .expect("spawn sh");
+            prop_assert!(out.status.success());
+            // Split on NUL; printf leaves a trailing NUL, so drop the final "".
+            let mut toks: Vec<String> = out
+                .stdout
+                .split(|&b| b == 0)
+                .map(|c| String::from_utf8_lossy(c).into_owned())
+                .collect();
+            prop_assert_eq!(toks.last().map(String::as_str), Some(""));
+            toks.pop();
+            // tmux would see: new-session -A -s <session> — and <session> is a
+            // single token equal to the intended name, never split or extended.
+            prop_assert_eq!(toks, vec![
+                "new-session".to_string(),
+                "-A".to_string(),
+                "-s".to_string(),
+                session,
+            ]);
+        }
     }
 }

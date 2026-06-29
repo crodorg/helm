@@ -1,4 +1,5 @@
 /target
+/mutants.out/
 config.toml
 *.db
 *.db-journal

@@ -1,9 +1,12 @@
 //! OpenBSD `rcctl` service inventory.
 //!
 //! Three commands:
-//!   rcctl ls on        → services enabled at boot
-//!   rcctl ls started   → services currently running
-//!   rcctl ls failed    → services that failed to start
+//!
+//! ```text
+//! rcctl ls on        → services enabled at boot
+//! rcctl ls started   → services currently running
+//! rcctl ls failed    → services that failed to start
+//! ```
 //!
 //! Each prints one service name per line. We diff the three sets to produce
 //! per-service state.
@@ -74,12 +77,15 @@ fn lines(s: &str) -> Vec<String> {
 /// spaces. We only care about the first four columns.
 ///
 /// State mapping:
-///   active   running          → Started
-///   active   exited           → Started (one-shot completed)
-///   active   *                → Started
-///   inactive *                → Stopped
-///   failed   *                → Failed
-///   *        *                → Untracked
+///
+/// ```text
+/// active   running          → Started
+/// active   exited           → Started (one-shot completed)
+/// active   *                → Started
+/// inactive *                → Stopped
+/// failed   *                → Failed
+/// *        *                → Untracked
+/// ```
 pub fn parse_systemctl(stdout: &str) -> Vec<Service> {
     let mut out: Vec<Service> = Vec::new();
     for raw in stdout.lines() {
@@ -111,9 +117,13 @@ pub fn parse_systemctl(stdout: &str) -> Vec<Service> {
 }
 
 /// Parse `launchctl list` output. Format:
-///   PID    Status    Label
-///   12345  0         com.apple.something
-///   -      0         com.user.background
+///
+/// ```text
+/// PID    Status    Label
+/// 12345  0         com.apple.something
+/// -      0         com.user.background
+/// ```
+///
 /// `PID = -` means stopped. `Status != 0` means failed last run. Header
 /// line is skipped.
 pub fn parse_launchctl(stdout: &str) -> Vec<Service> {
