@@ -1,0 +1,40 @@
+[package]
+name = "helm-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+toml = "0.8"
+
+[dependencies.helm]
+path = ".."
+
+# Keep this crate out of any accidental parent workspace and let cargo-fuzz own
+# its own profiles.
+[workspace]
+
+[[bin]]
+name = "shell_quote"
+path = "fuzz_targets/shell_quote.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_target"
+path = "fuzz_targets/parse_target.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config_toml"
+path = "fuzz_targets/config_toml.rs"
+test = false
+doc = false
+bench = false

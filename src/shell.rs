@@ -149,10 +149,11 @@ fn shell_open(args: &[String]) -> std::process::ExitCode {
         cmd.arg("new-session").arg("-A").arg("-s").arg(&session);
         cmd.exec()
     } else {
-        let remote = tmux::with_remote_path(&format!(
-            "{} new-session -A -s {session}",
-            tmux::tmux_prefix()
-        ));
+        // The session name embeds a user-controlled label and rides into a
+        // remote shell as a single string, so it must be shell-quoted (see
+        // `tmux::attach_session_script`) — a raw interpolation here would let a
+        // label like `; rm -rf ~` break out of the `ssh <alias> <script>` slot.
+        let remote = tmux::attach_session_script(&session);
         // Pick mosh vs ssh BEFORE exec — exec replaces this process, so a
         // post-failure fallback is impossible. mosh parses no shell syntax
         // itself, so the script rides in `sh -c` after `--`; mosh always

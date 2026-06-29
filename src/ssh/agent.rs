@@ -153,6 +153,18 @@ fn parse_ssh_keygen_lf(stdout: &str) -> Option<String> {
 /// agent state is not Ok — caller should print this and exit before the TUI
 /// touches the terminal. Lists copy-pasteable `ssh-add` commands.
 pub fn render_blocker(status: &AgentStatus, ssh_hosts: &[SshHost]) -> Option<String> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    render_blocker_with_home(status, ssh_hosts, home.as_deref())
+}
+
+/// Body of [`render_blocker`] with `$HOME` injected rather than read from the
+/// process environment, so tests can pin it without the data-racy global
+/// `set_var` (concurrent `setenv`/`getenv` is UB). Production passes real `$HOME`.
+fn render_blocker_with_home(
+    status: &AgentStatus,
+    ssh_hosts: &[SshHost],
+    home: Option<&Path>,
+) -> Option<String> {
     match status {
         AgentStatus::Ok => None,
         AgentStatus::SshAddMissing => Some(
@@ -166,7 +178,7 @@ pub fn render_blocker(status: &AgentStatus, ssh_hosts: &[SshHost]) -> Option<Str
                 s.push_str("  ssh-add\n");
             } else {
                 for k in &keys {
-                    s.push_str(&format!("  ssh-add {}\n", tildify(k)));
+                    s.push_str(&format!("  ssh-add {}\n", tildify(k, home)));
                 }
             }
             s.push_str("\nThen re-run helm.");
@@ -183,11 +195,11 @@ pub fn render_blocker(status: &AgentStatus, ssh_hosts: &[SshHost]) -> Option<Str
             };
             let pad = ks
                 .iter()
-                .map(|m| tildify(&m.identity_file).len())
+                .map(|m| tildify(&m.identity_file, home).len())
                 .max()
                 .unwrap_or(0);
             for m in ks {
-                let path = tildify(&m.identity_file);
+                let path = tildify(&m.identity_file, home);
                 s.push_str(&format!(
                     "  ssh-add {:<width$}    # used by {}\n",
                     path,
@@ -214,12 +226,14 @@ fn unique_identity_files(ssh_hosts: &[SshHost]) -> Vec<PathBuf> {
     out
 }
 
-fn tildify(p: &Path) -> String {
-    if let Some(home) = std::env::var_os("HOME") {
-        let home = PathBuf::from(home);
-        if let Ok(rest) = p.strip_prefix(&home) {
-            return format!("~/{}", rest.display());
-        }
+/// Replace a leading `$HOME` with `~`. `home` is injected (not read from the
+/// process env) so callers/tests stay free of the data-racy global `set_var`;
+/// the public [`render_blocker`] passes the real `$HOME`.
+fn tildify(p: &Path, home: Option<&Path>) -> String {
+    if let Some(home) = home
+        && let Ok(rest) = p.strip_prefix(home)
+    {
+        return format!("~/{}", rest.display());
     }
     p.display().to_string()
 }
@@ -311,14 +325,14 @@ mod tests {
 
     #[test]
     fn render_blocker_missing_keys_lists_ssh_add() {
-        unsafe {
-            std::env::set_var("HOME", "/home/user");
-        }
+        // HOME is injected, not mutated globally — concurrent setenv/getenv with
+        // other tests (e.g. the `directories` crate reading HOME) is a data race.
+        let home = Path::new("/home/user");
         let status = AgentStatus::MissingKeys(vec![MissingKey {
             identity_file: PathBuf::from("/home/user/.ssh/id_ed25519_vps"),
             used_by: vec!["vps1".into(), "vps2".into(), "vps3".into()],
         }]);
-        let msg = render_blocker(&status, &[]).unwrap();
+        let msg = render_blocker_with_home(&status, &[], Some(home)).unwrap();
         assert!(msg.contains("ssh-add ~/.ssh/id_ed25519_vps"));
         assert!(msg.contains("used by vps1, vps2, vps3"));
         assert!(msg.contains("re-run helm"));
@@ -326,9 +340,7 @@ mod tests {
 
     #[test]
     fn render_blocker_unreachable_enumerates_identity_files() {
-        unsafe {
-            std::env::set_var("HOME", "/home/user");
-        }
+        let home = Path::new("/home/user");
         let hosts = vec![
             SshHost {
                 alias: "vps1".into(),
@@ -345,7 +357,8 @@ mod tests {
                 identity_file: Some(PathBuf::from("/home/user/.ssh/id_ed25519")),
             },
         ];
-        let msg = render_blocker(&AgentStatus::AgentUnreachable, &hosts).unwrap();
+        let msg =
+            render_blocker_with_home(&AgentStatus::AgentUnreachable, &hosts, Some(home)).unwrap();
         assert!(msg.contains("eval $(ssh-agent)"));
         assert!(msg.contains("ssh-add ~/.ssh/id_ed25519_vps"));
         assert!(msg.contains("ssh-add ~/.ssh/id_ed25519"));
