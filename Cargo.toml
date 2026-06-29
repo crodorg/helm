@@ -5,6 +5,10 @@ edition = "2024"
 description = "Shared-shell etiquette for AI agents + a CLI for the fleet they live on"
 license = "MIT"
 
+[lib]
+name = "helm"
+path = "src/lib.rs"
+
 [[bin]]
 name = "helm"
 path = "src/main.rs"
