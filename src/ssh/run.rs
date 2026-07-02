@@ -23,12 +23,10 @@ pub enum RunEvent {
 }
 
 /// Handle to a running remote command.
-#[allow(dead_code)]
 pub struct RunHandle {
     pub rx: Receiver<RunEvent>,
     stdin: Option<ChildStdin>,
     pub alias: String,
-    pub command: String,
 }
 
 impl RunHandle {
@@ -109,8 +107,32 @@ pub fn spawn_remote(alias: &str, cmd: &str) -> std::io::Result<RunHandle> {
         rx,
         stdin,
         alias: alias.to_string(),
-        command: cmd.to_string(),
     })
+}
+
+/// Run a single quick command and capture its whole stdout: `ssh -- <alias>
+/// <cmd>` for remote aliases, or `sh -c <cmd>` for the reserved `local` alias.
+///
+/// The one-shot capture counterpart to [`spawn_remote`]'s live stream — for
+/// inventory pulls and snapshots where the caller wants the result, not a
+/// stream. `--` ends ssh option parsing so a `-`-leading alias can't be read as
+/// a flag (see [`spawn_remote`]); routing every one-shot through here keeps that
+/// invariant in one function instead of at each call site.
+pub fn one_shot(alias: &str, cmd: &str) -> Result<String, String> {
+    let exec = if alias == crate::tmux::LOCAL_ALIAS {
+        Command::new("sh").arg("-c").arg(cmd).output()
+    } else {
+        Command::new("ssh").arg("--").arg(alias).arg(cmd).output()
+    };
+    match exec {
+        Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).into_owned()),
+        Ok(o) => Err(format!(
+            "{cmd} exit {}: {}",
+            o.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&o.stderr).trim()
+        )),
+        Err(e) => Err(format!("spawn failed: {e}")),
+    }
 }
 
 fn stream<R: Read + Send + 'static>(mut r: R, tx: Sender<RunEvent>, is_stderr: bool) {

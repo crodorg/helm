@@ -5,12 +5,11 @@
 //! - `GET /v2/instances` → fleet inventory (region, plan id, status, IP, …)
 //! - `GET /v2/plans`     → plan catalog (plan id → monthly_cost)
 //!
-//! Both endpoints fire in parallel from `spawn_vultr_fetch`. The caller
-//! polls the returned `Receiver<VultrResult>` from the main loop and
-//! merges results into `VultrCache` once both slots arrive.
+//! Both endpoints fire in parallel (`fetch_vultr`), which blocks until both
+//! land and returns the joined `VultrCache`.
 //!
-//! No new dependencies — `curl` is shelled out (same pattern as the
-//! health pane), `serde_json` is already in `Cargo.toml`.
+//! No new dependencies — `curl` is shelled out, `serde_json` is already in
+//! `Cargo.toml`.
 //!
 //! API key handling: the key reaches `curl` via `-H "Authorization:
 //! Bearer …"`. This means it is briefly visible to `ps -ax` on the local
@@ -75,61 +74,53 @@ impl VultrCache {
     }
 }
 
-/// Which API endpoint produced a `VultrResult`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VultrSlot {
-    Instances,
-    Plans,
-}
-
-/// One completed endpoint fetch. `output` is the raw JSON body on success
-/// or a human-readable error string on failure.
-#[derive(Debug)]
-pub struct VultrResult {
-    pub slot: VultrSlot,
-    pub output: Result<String, String>,
-}
-
-/// Fire two parallel `curl` calls (instances + plans). Each thread sends
-/// a single `VultrResult` to the returned channel. Caller drains via
-/// `try_recv` from the main loop.
-pub fn spawn_vultr_fetch(api_key: String) -> Receiver<VultrResult> {
-    let (tx, rx) = channel();
-    let endpoints: [(VultrSlot, &str); 2] = [
-        (VultrSlot::Instances, "https://api.vultr.com/v2/instances"),
-        (VultrSlot::Plans, "https://api.vultr.com/v2/plans"),
-    ];
-    for (slot, url) in endpoints {
+/// Fetch both endpoints (instances + plans) and return the joined cache. The
+/// two `curl` calls run on their own threads — `/v2/plans` returns the full SKU
+/// catalog and routinely takes >10s, so overlapping them roughly halves
+/// wall-clock — then this blocks until both land and parses them.
+pub fn fetch_vultr(api_key: String) -> Result<VultrCache, String> {
+    let instances = {
         let key = api_key.clone();
-        let url = url.to_string();
-        let tx = tx.clone();
-        thread::spawn(move || {
-            let auth = format!("Authorization: Bearer {key}");
-            // 30s timeout: `/v2/plans` returns the full Vultr SKU catalog
-            // (hundreds of rows across regions) and routinely takes >10s
-            // on first hit. `/v2/instances` is fast but shares the same
-            // ceiling for simplicity.
-            let result = match Command::new("curl")
-                .args(["-sS", "-m", "30", "-H"])
-                .arg(&auth)
-                .arg(&url)
-                .output()
-            {
-                Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).into_owned()),
-                Ok(o) => Err(format!(
-                    "vultr {url} exit {}: {}",
-                    o.status.code().unwrap_or(-1),
-                    String::from_utf8_lossy(&o.stderr).trim()
-                )),
-                Err(e) => Err(format!("vultr curl spawn failed: {e}")),
-            };
-            let _ = tx.send(VultrResult {
-                slot,
-                output: result,
-            });
-        });
+        thread::spawn(move || curl_get(&key, "https://api.vultr.com/v2/instances"))
+    };
+    let plans = {
+        let key = api_key.clone();
+        thread::spawn(move || curl_get(&key, "https://api.vultr.com/v2/plans"))
+    };
+    let instances = join_fetch(instances, "instances")?;
+    let plans = join_fetch(plans, "plans")?;
+    Ok(VultrCache {
+        instances: parse_instances(&instances)?,
+        plans: parse_plans(&plans)?,
+    })
+}
+
+/// Join one fetch thread, flattening a thread panic into the error channel.
+fn join_fetch(h: thread::JoinHandle<Result<String, String>>, what: &str) -> Result<String, String> {
+    h.join()
+        .map_err(|_| format!("vultr {what} thread panicked"))?
+}
+
+/// `curl` one Vultr endpoint with the bearer key, returning the raw JSON body.
+fn curl_get(api_key: &str, url: &str) -> Result<String, String> {
+    let auth = format!("Authorization: Bearer {api_key}");
+    // 30s timeout: `/v2/plans` returns the full Vultr SKU catalog (hundreds of
+    // rows across regions) and routinely takes >10s on first hit; `/v2/instances`
+    // is fast but shares the ceiling for simplicity.
+    match Command::new("curl")
+        .args(["-sS", "-m", "30", "-H"])
+        .arg(&auth)
+        .arg(url)
+        .output()
+    {
+        Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).into_owned()),
+        Ok(o) => Err(format!(
+            "vultr {url} exit {}: {}",
+            o.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&o.stderr).trim()
+        )),
+        Err(e) => Err(format!("vultr curl spawn failed: {e}")),
     }
-    rx
 }
 
 /// Vultr lifecycle actions. Mapping to API endpoints lives in
@@ -185,7 +176,7 @@ pub struct ActionResult {
 }
 
 /// Fire one action POST in a background thread. Returns a receiver the
-/// main loop drains via `try_recv`.
+/// caller blocks on for the single result.
 pub fn spawn_vultr_action(
     api_key: String,
     action: ActionKind,

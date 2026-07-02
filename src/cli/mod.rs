@@ -85,7 +85,7 @@ pub(crate) fn parse_read_args(args: &[String]) -> std::result::Result<ReadArgs, 
 }
 
 /// Load config (silently — these run repeatedly under the agent) and merge
-/// `~/.ssh/config` hosts, mirroring the TUI/daemon startup path.
+/// `~/.ssh/config` hosts, mirroring helm's normal host resolution.
 pub(crate) fn merged_config() -> Result<Config> {
     let mut cfg = Config::load_silent()?;
     crate::load_ssh_hosts_for(&mut cfg);

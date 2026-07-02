@@ -44,7 +44,7 @@ pub const LOCAL_ALIAS: &str = "local";
 /// (e.g. `-u` to force UTF-8). Set once at startup from config via
 /// [`set_flags`]; unset means plain `tmux`. A global keeps the tmux helpers'
 /// signatures unchanged — config is loaded once per process, so a single
-/// set is enough for the CLI, the TUI, and the daemon alike.
+/// set covers every tmux helper for the process.
 static TMUX_FLAGS: OnceLock<Vec<String>> = OnceLock::new();
 
 /// Install the global tmux flags. First call wins (OnceLock); later calls are
@@ -84,6 +84,18 @@ pub fn parse_target(target: &str) -> (String, String) {
         Some((alias, _)) => (alias.to_string(), "helm".to_string()),
         None => (target.to_string(), "helm".to_string()),
     }
+}
+
+/// Whether a session label is safe to embed in tmux's *own* target and format
+/// parsers. `shell_quote` guards the shell, but tmux reads `:` / `.` as
+/// session/window/pane separators in `-t` and `{`/`}`/`,` as format syntax, so
+/// restrict labels to `[A-Za-z0-9._-]`. Empty is valid (it means "no label" →
+/// the bare `helm` session). Validate at the point a label enters from argv;
+/// internal re-parses of an already-checked target don't need to re-run this.
+pub fn valid_label(label: &str) -> bool {
+    label
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
 /// POSIX-shell-quote a string so it survives ssh's single round of remote
@@ -352,9 +364,21 @@ mod tests {
 
     #[test]
     fn target_with_multiple_colons_takes_first_split() {
-        // `alias:a:b` → label is `a:b`, session name `helm-a:b`. tmux
-        // session names containing `:` are fine when properly quoted.
+        // `alias:a:b` → label is `a:b`, session name `helm-a:b`. parse_target
+        // stays purely structural; the `:`-bearing label is rejected upstream
+        // by `valid_label` (quoting guards the shell, not tmux's own `-t`).
         assert_eq!(parse_target("vps1:a:b"), ("vps1".into(), "helm-a:b".into()));
+    }
+
+    #[test]
+    fn valid_label_allows_safe_charset_only() {
+        assert!(valid_label(""));
+        assert!(valid_label("deploy"));
+        assert!(valid_label("logs-2.0_v"));
+        assert!(!valid_label("a:b")); // tmux -t session:window
+        assert!(!valid_label("a,b")); // tmux format list
+        assert!(!valid_label("a}b")); // tmux format close
+        assert!(!valid_label("a b")); // whitespace
     }
 
     #[test]

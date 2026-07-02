@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use serde_json::{Value, json};
 
 use super::{fail, parse_read_args, print_json, table, usage};
-use crate::vultr::{self, Instance, VultrCache, VultrSlot};
+use crate::vultr::{self, VultrCache};
 
 // ── helm vultr ──────────────────────────────────────────────────────────
 
@@ -26,28 +26,9 @@ pub(super) fn vultr(args: &[String]) -> ExitCode {
         Ok(k) if !k.is_empty() => k,
         _ => return fail("VULTR_API_KEY not set"),
     };
-    let rx = vultr::spawn_vultr_fetch(key);
-    let mut instances: Option<Vec<Instance>> = None;
-    let mut plans = None;
-    for _ in 0..2 {
-        match rx.recv() {
-            Ok(r) => match (r.slot, r.output) {
-                (VultrSlot::Instances, Ok(body)) => match vultr::parse_instances(&body) {
-                    Ok(v) => instances = Some(v),
-                    Err(e) => return fail(&e),
-                },
-                (VultrSlot::Plans, Ok(body)) => match vultr::parse_plans(&body) {
-                    Ok(v) => plans = Some(v),
-                    Err(e) => return fail(&e),
-                },
-                (_, Err(e)) => return fail(&e),
-            },
-            Err(e) => return fail(&format!("vultr channel: {e}")),
-        }
-    }
-    let cache = VultrCache {
-        instances: instances.unwrap_or_default(),
-        plans: plans.unwrap_or_default(),
+    let cache = match vultr::fetch_vultr(key) {
+        Ok(c) => c,
+        Err(e) => return fail(&e),
     };
     if pa.json {
         print_json(&vultr_json(&cache));

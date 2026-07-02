@@ -23,6 +23,7 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::activity::ActivityKind;
 use crate::config::Config;
+use crate::opts;
 use crate::runcmd::{self, strip_trailing_blank};
 use crate::tmux;
 
@@ -175,10 +176,15 @@ fn window_of(pane: &str) -> Result<String> {
 
 /// Map an optional `-l LABEL` to the tmux tag value: bare → `helm`, `logs` →
 /// `helm-logs`. Mirrors the skill's `here`/`here:logs` → `@helm_label`.
-fn label_tag(label: Option<&str>) -> String {
+fn label_tag(label: Option<&str>) -> Result<String> {
     match label {
-        Some(l) if !l.is_empty() => format!("helm-{l}"),
-        _ => "helm".to_string(),
+        Some(l) if !l.is_empty() => {
+            if !crate::tmux::valid_label(l) {
+                bail!("label must be [A-Za-z0-9._-]: `{l}`");
+            }
+            Ok(format!("helm-{l}"))
+        }
+        _ => Ok("helm".to_string()),
     }
 }
 
@@ -324,16 +330,7 @@ fn parse_opts(args: &[String]) -> Result<Opts> {
             }
             "-n" => {
                 let v = take_val(args, &mut i, "-n")?;
-                let n: u32 = v
-                    .parse()
-                    .map_err(|_| anyhow!("-n requires a positive integer"))?;
-                if n == 0 {
-                    // `-S -0` captures the whole visible pane, not "0 lines";
-                    // reject so the value matches the promised positive integer
-                    // (matches `helm shell read`).
-                    return Err(anyhow!("-n requires a positive integer"));
-                }
-                o.lines = Some(n);
+                o.lines = Some(opts::parse_lines(&v).map_err(|e| anyhow!(e))?);
             }
             "--raw" => {
                 o.raw = true;
@@ -372,7 +369,7 @@ fn cmd_open(args: &[String]) -> Result<ExitCode> {
     }
     let anchor = current_pane()?;
     let win = window_of(&anchor)?;
-    let tag = label_tag(o.label.as_deref());
+    let tag = label_tag(o.label.as_deref())?;
     let pane = ensure_drivable(&win, &anchor, &tag, o.below, o.size)?;
     log_pane(ActivityKind::ShellOpen, &tag, "open", Some(0));
     eprintln!("helm: pane {tag} ready ({pane}) in this window");
@@ -405,7 +402,7 @@ fn cmd_send(args: &[String]) -> Result<ExitCode> {
     let text = rest.join(" ");
     let anchor = current_pane()?;
     let win = window_of(&anchor)?;
-    let tag = label_tag(label.as_deref());
+    let tag = label_tag(label.as_deref())?;
     let pane = ensure_drivable(&win, &anchor, &tag, false, None)?;
     // `--` so a body starting with `-` is literal keys, not a send-keys flag.
     tmux_act(&["send-keys", "-t", &pane, "-l", "--", &text])?;
@@ -427,23 +424,21 @@ fn parse_pane_run(args: &[String]) -> Result<(Option<String>, String, u32)> {
             let val = rest
                 .get(i + 1)
                 .ok_or_else(|| anyhow!("--timeout requires a value (seconds)"))?;
-            timeout = match val.parse::<u32>() {
-                Ok(s) if s > 0 => s,
-                _ => bail!("--timeout requires a positive integer"),
-            };
+            timeout = opts::parse_timeout(val).map_err(|e| anyhow!(e))?;
             i += 2;
         } else {
             cmd_parts.push(rest[i].clone());
             i += 1;
         }
     }
-    let cmd = cmd_parts.join(" ");
-    if cmd.trim().is_empty() {
-        bail!("usage: helm pane run [-l LABEL] [--timeout SECS] <cmd...>");
-    }
-    if cmd.contains('\n') {
-        bail!("helm pane run: command must be a single line (no newlines)");
-    }
+    let cmd = opts::single_line_command(&cmd_parts).map_err(|e| match e {
+        opts::CommandError::Empty => {
+            anyhow!("usage: helm pane run [-l LABEL] [--timeout SECS] <cmd...>")
+        }
+        opts::CommandError::MultiLine => {
+            anyhow!("helm pane run: command must be a single line (no newlines)")
+        }
+    })?;
     Ok((label, cmd, timeout))
 }
 
@@ -451,7 +446,7 @@ fn cmd_run(args: &[String]) -> Result<ExitCode> {
     let (label, cmd, timeout) = parse_pane_run(args)?;
     let anchor = current_pane()?;
     let win = window_of(&anchor)?;
-    let tag = label_tag(label.as_deref());
+    let tag = label_tag(label.as_deref())?;
     let pane = ensure_drivable(&win, &anchor, &tag, false, None)?;
     let outcome = runcmd::run_in_pane(&pane, &cmd, timeout)?;
     if outcome.busy {
@@ -475,18 +470,17 @@ fn cmd_run(args: &[String]) -> Result<ExitCode> {
         println!("{}", outcome.output);
     }
     match outcome.exit {
-        Some(code) => {
-            eprintln!("exit: {code}");
-            Ok(ExitCode::from(code.clamp(0, 255) as u8))
-        }
-        None => {
-            eprintln!(
-                "helm: command still running after {timeout}s (timeout). \
-                 Poll with `helm pane read`."
-            );
-            Ok(ExitCode::from(124))
-        }
+        Some(code) => eprintln!("exit: {code}"),
+        None => eprintln!(
+            "helm: command still running after {timeout}s (timeout). \
+             Poll with `helm pane read`."
+        ),
     }
+    Ok(ExitCode::from(opts::run_exit_byte(
+        false,
+        false,
+        outcome.exit,
+    )))
 }
 
 fn cmd_key(args: &[String]) -> Result<ExitCode> {
@@ -496,7 +490,7 @@ fn cmd_key(args: &[String]) -> Result<ExitCode> {
     }
     let anchor = current_pane()?;
     let win = window_of(&anchor)?;
-    let tag = label_tag(label.as_deref());
+    let tag = label_tag(label.as_deref())?;
     let pane = ensure_drivable(&win, &anchor, &tag, false, None)?;
     let mut v: Vec<String> = vec!["send-keys".into(), "-t".into(), pane.clone(), "--".into()];
     v.extend(rest.iter().cloned());
@@ -510,7 +504,7 @@ fn cmd_read(args: &[String]) -> Result<ExitCode> {
     let o = parse_opts(args)?;
     let anchor = current_pane()?;
     let win = window_of(&anchor)?;
-    let tag = label_tag(o.label.as_deref());
+    let tag = label_tag(o.label.as_deref())?;
     let pane = ensure_drivable(&win, &anchor, &tag, false, None)?;
     let n = o.lines.unwrap_or(tmux::DEFAULT_CAPTURE_LINES);
     let neg = format!("-{n}");
@@ -528,7 +522,7 @@ fn cmd_close(args: &[String]) -> Result<ExitCode> {
     let o = parse_opts(args)?;
     let anchor = current_pane()?;
     let win = window_of(&anchor)?;
-    let tag = label_tag(o.label.as_deref());
+    let tag = label_tag(o.label.as_deref())?;
     let Some(pane) = find_tagged(&win, "@helm_label", &tag)? else {
         bail!("no helm pane labelled {tag} in this window");
     };
@@ -672,9 +666,10 @@ mod tests {
 
     #[test]
     fn label_tag_maps_like_the_skill() {
-        assert_eq!(label_tag(None), "helm");
-        assert_eq!(label_tag(Some("")), "helm");
-        assert_eq!(label_tag(Some("logs")), "helm-logs");
+        assert_eq!(label_tag(None).unwrap(), "helm");
+        assert_eq!(label_tag(Some("")).unwrap(), "helm");
+        assert_eq!(label_tag(Some("logs")).unwrap(), "helm-logs");
+        assert!(label_tag(Some("a:b")).is_err());
     }
 
     #[test]

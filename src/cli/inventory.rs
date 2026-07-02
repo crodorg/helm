@@ -1,5 +1,5 @@
-//! `helm svc|ps|ports <host>` — per-host inventory, reusing the same
-//! collectors the TUI panes used (`ssh::collect`).
+//! `helm svc|ps|ports <host>` — per-host inventory over the `ssh::collect`
+//! fetchers.
 
 use std::process::ExitCode;
 
@@ -9,7 +9,7 @@ use super::{fail, parse_read_args, print_json, resolve_host, table, usage};
 use crate::inventory::ports::{self, ListeningSocket};
 use crate::inventory::processes::{self, Process};
 use crate::inventory::services::{Service, ServiceState};
-use crate::ssh::collect::{InvSlot, spawn_processes_and_ports, spawn_services};
+use crate::ssh::collect::{fetch_ports, fetch_processes, fetch_services};
 
 const DEFAULT_PS_ROWS: u32 = 15;
 
@@ -41,12 +41,9 @@ pub(super) fn svc(args: &[String]) -> ExitCode {
     let Some(h) = resolve_host(&cfg, name) else {
         return fail(&format!("unknown host `{name}`"));
     };
-    let services = match spawn_services(&h.ssh_alias, h.os).recv() {
-        Ok(r) => match r.output {
-            Ok(v) => v,
-            Err(e) => return fail(&format!("services on {}: {e}", h.name)),
-        },
-        Err(e) => return fail(&format!("services channel: {e}")),
+    let services = match fetch_services(&h.ssh_alias, h.os) {
+        Ok(v) => v,
+        Err(e) => return fail(&format!("services on {}: {e}", h.name)),
     };
     if pa.json {
         print_json(&svc_json(&services));
@@ -93,7 +90,7 @@ pub(super) fn ps(args: &[String]) -> ExitCode {
     let Some(h) = resolve_host(&cfg, name) else {
         return fail(&format!("unknown host `{name}`"));
     };
-    let raw = match collect_slot(&h.ssh_alias, InvSlot::Processes) {
+    let raw = match fetch_processes(&h.ssh_alias) {
         Ok(s) => s,
         Err(e) => return fail(&format!("ps on {}: {e}", h.name)),
     };
@@ -165,7 +162,7 @@ pub(super) fn ports(args: &[String]) -> ExitCode {
     let Some(h) = resolve_host(&cfg, name) else {
         return fail(&format!("unknown host `{name}`"));
     };
-    let raw = match collect_slot(&h.ssh_alias, InvSlot::Ports) {
+    let raw = match fetch_ports(&h.ssh_alias) {
         Ok(s) => s,
         Err(e) => return fail(&format!("ports on {}: {e}", h.name)),
     };
@@ -196,22 +193,6 @@ fn render_ports(socks: &[ListeningSocket], host: &str) -> String {
         .map(|s| vec![s.proto.clone(), s.local.clone()])
         .collect();
     format!("{}\n", table(&["PROTO", "LOCAL"], &rows))
-}
-
-/// Drain the two-slot `spawn_processes_and_ports` channel and return the raw
-/// stdout for the requested slot. The other slot's command runs in parallel
-/// and is discarded (cheap; the two threads overlap).
-fn collect_slot(alias: &str, want: InvSlot) -> std::result::Result<String, String> {
-    let rx = spawn_processes_and_ports(alias);
-    let mut found: Option<Result<String, String>> = None;
-    for _ in 0..2 {
-        match rx.recv() {
-            Ok(r) if r.slot == want => found = Some(r.output),
-            Ok(_) => {}
-            Err(e) => return Err(format!("channel: {e}")),
-        }
-    }
-    found.unwrap_or_else(|| Err("no result".into()))
 }
 
 #[cfg(test)]

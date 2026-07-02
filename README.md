@@ -3,11 +3,11 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust 2024](https://img.shields.io/badge/edition-2024-dea584.svg)](https://doc.rust-lang.org/edition-guide/rust-2024/)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20OpenBSD-lightgrey.svg)](#)
-[![Status](https://img.shields.io/badge/status-v0.4.0-orange.svg)](#)
+[![Status](https://img.shields.io/badge/status-v0.4.3-orange.svg)](#)
 
 A Rust CLI that lets an AI agent and a human drive the *same* tmux session — local or ssh-remote — with the discipline baked in so neither side breaks the other. The agent can run a command and read its exit code in one call, send raw keys to drive a full-screen TUI, or split a pane right inside your own tmux window. Plus a handful of read-only verbs for inspecting the fleet of hosts those sessions live on.
 
-**Status:** v0.4.0. Two shared-shell surfaces — `helm shell` (a tmux session on any ssh host, or locally) and `helm pane` (a pane in your own tmux window) — plus one-shot `helm exec`, the fleet-inspection verbs, and an append-only audit log. Linux + macOS + OpenBSD supported.
+**Status:** v0.4.3. Two shared-shell surfaces — `helm shell` (a tmux session on any ssh host, or locally) and `helm pane` (a pane in your own tmux window) — plus one-shot `helm exec`, the fleet-inspection verbs, and an append-only audit log. Linux + macOS + OpenBSD supported.
 
 ![helm — inspecting a fleet, splitting a drivable pane in your own tmux, running a command for its output and exit code, and reading the audit log — all from one CLI](docs/demo.gif)
 

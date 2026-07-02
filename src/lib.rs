@@ -11,6 +11,7 @@ pub mod config;
 pub mod history;
 pub mod inventory;
 pub mod mosh;
+pub mod opts;
 pub mod pane;
 pub mod runcmd;
 pub mod shell;
@@ -97,9 +98,21 @@ fn run_exec_cli(args: &[String]) -> std::process::ExitCode {
     }
     let cmd = args[1..].join(" ");
 
-    // Direct ssh spawn — no daemon. Output is captured as it streams so the
-    // full transcript can be persisted to history.db under the `agent`
-    // source, matching what the old daemon engine recorded.
+    // Direct ssh spawn — no daemon; the transcript is streamed, recorded to
+    // history under the `agent` source, and logged (same path as `helm run`).
+    stream_and_record("helm exec", RunSource::Agent, &alias, &cmd)
+}
+
+/// Spawn `cmd` on `alias`, stream its output live, and record the completed run
+/// to history under `source` plus the activity log — returning the process exit
+/// code. Shared by `helm exec` (agent) and `helm run` (operator); `surface`
+/// names the verb in the password-prompt message.
+pub(crate) fn stream_and_record(
+    surface: &str,
+    source: RunSource,
+    alias: &str,
+    cmd: &str,
+) -> std::process::ExitCode {
     let started_at = std::time::Instant::now();
     let started_at_unix = activity::now_unix() as i64;
     let mut lines: Vec<LineRecord> = vec![LineRecord {
@@ -107,9 +120,9 @@ fn run_exec_cli(args: &[String]) -> std::process::ExitCode {
         line: format!("$ ssh {alias} '{cmd}'"),
     }];
 
-    let exit = match spawn_remote(&alias, &cmd) {
+    let exit = match spawn_remote(alias, cmd) {
         Ok(handle) => {
-            let code = drain_exec(handle, &mut lines);
+            let code = drain_run(surface, handle, &mut lines);
             lines.push(LineRecord {
                 kind: LineKind::System,
                 line: format!("exit {code}"),
@@ -126,44 +139,40 @@ fn run_exec_cli(args: &[String]) -> std::process::ExitCode {
         }
     };
 
-    persist_exec_run(
-        &alias,
-        &cmd,
+    persist_run(
+        source,
+        alias,
+        cmd,
         started_at_unix,
         exit,
         started_at.elapsed(),
         &lines,
     );
-    log_action(
-        activity::ActivityKind::Exec,
-        &alias,
-        "",
-        &cmd,
-        "",
-        Some(exit),
-    );
+    log_action(activity::ActivityKind::Exec, alias, "", cmd, "", Some(exit));
+    std::process::ExitCode::from(clamp_exit(exit))
+}
 
-    // Map any out-of-range exit (including negatives from signal deaths,
-    // which the wait thread reports as -1) to the conventional "command died
-    // abnormally" code 130. Wrapping silently to 255 via `as u8` would
-    // collide with the legitimate "argument list too long" exit on most
-    // shells; 130 ("Ctrl-C") is the closest semantic match to the
-    // underlying signal death we lose by serializing through u8.
-    let c: u8 = if (0..=255).contains(&exit) {
+/// Map a raw exit integer (possibly negative from a signal death, which the
+/// wait thread reports as -1) into a process exit byte: out-of-range → 130, the
+/// conventional "command died abnormally" code. Wrapping silently to 255 via
+/// `as u8` would collide with the legitimate "argument list too long" exit on
+/// most shells; 130 ("Ctrl-C") is the closest match to the signal death lost by
+/// serializing through u8.
+pub(crate) fn clamp_exit(exit: i32) -> u8 {
+    if (0..=255).contains(&exit) {
         exit as u8
     } else {
         130
-    };
-    std::process::ExitCode::from(c)
+    }
 }
 
 /// Block on a remote command's event stream, printing output live and
-/// appending every line to `lines` for history persistence. `helm exec` is
-/// the agent surface: there is no TTY or modal to answer an interactive
-/// password prompt, so on `NeedPassword` it closes stdin — the remote
-/// `doas`/`sudo` then gets EOF and fails fast instead of blocking this loop
-/// forever on a PTY read no one will satisfy.
-fn drain_exec(mut handle: RunHandle, lines: &mut Vec<LineRecord>) -> i32 {
+/// appending every line to `lines` for history persistence. Shared by `helm
+/// exec` and `helm run` (`surface` names the verb): neither has a TTY or modal
+/// to answer an interactive password prompt, so on `NeedPassword` it closes
+/// stdin — the remote `doas`/`sudo` then gets EOF and fails fast instead of
+/// blocking this loop forever on a PTY read no one will satisfy.
+fn drain_run(surface: &str, mut handle: RunHandle, lines: &mut Vec<LineRecord>) -> i32 {
     let mut exit = 1;
     while let Ok(ev) = handle.rx.recv() {
         match ev {
@@ -187,7 +196,7 @@ fn drain_exec(mut handle: RunHandle, lines: &mut Vec<LineRecord>) -> i32 {
             }),
             RunEvent::NeedPassword => {
                 eprintln!(
-                    "helm: password prompt detected — `helm exec` can't answer it; \
+                    "helm: password prompt detected — `{surface}` can't answer it; \
                      closing input (the command will fail). Use `helm shell open {}` \
                      for interactive auth.",
                     handle.alias
@@ -212,10 +221,11 @@ fn drain_exec(mut handle: RunHandle, lines: &mut Vec<LineRecord>) -> i32 {
     exit
 }
 
-/// Best-effort: append one completed `helm exec` run to the history DB under
-/// the `agent` source. A history failure must never change the command's exit
-/// code, so errors are reported to stderr and otherwise swallowed.
-fn persist_exec_run(
+/// Best-effort: append one completed run to the history DB under `source`. A
+/// history failure must never change the command's exit code, so errors are
+/// reported to stderr and otherwise swallowed.
+fn persist_run(
+    source: RunSource,
     alias: &str,
     cmd: &str,
     started_at_unix: i64,
@@ -232,7 +242,7 @@ fn persist_exec_run(
     };
     let duration_ms = i64::try_from(elapsed.as_millis()).ok();
     if let Err(e) = store.insert_run(
-        RunSource::Agent,
+        source,
         alias,
         cmd,
         started_at_unix,
@@ -396,3 +406,17 @@ fn run_auth_cli(args: &[String]) -> std::process::ExitCode {
 // Daemon / IPC removed in the Phase 4 teardown: `helm exec` now spawns ssh
 // directly (see `run_exec_cli`) and writes history + activity inline, so the
 // headless control socket is gone.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamp_exit_maps_out_of_range_to_130() {
+        assert_eq!(clamp_exit(0), 0);
+        assert_eq!(clamp_exit(1), 1);
+        assert_eq!(clamp_exit(255), 255);
+        assert_eq!(clamp_exit(-1), 130);
+        assert_eq!(clamp_exit(256), 130);
+    }
+}

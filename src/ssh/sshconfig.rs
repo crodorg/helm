@@ -1,5 +1,5 @@
 //! Minimal `~/.ssh/config` parser. Extracts Host blocks with alias, HostName,
-//! User, and Port. Wildcard aliases (`*`, `?`, `!`-prefixed), IP-literal
+//! and User. Wildcard aliases (`*`, `?`, `!`-prefixed), IP-literal
 //! aliases, and `Match`/`Include` blocks are skipped — helm only cares about
 //! named, addressable hosts. Multiple aliases on one `Host` line each get
 //! their own entry sharing the block's fields.
@@ -12,7 +12,6 @@ pub struct SshHost {
     pub alias: String,
     pub hostname: Option<String>,
     pub user: Option<String>,
-    pub port: Option<u16>,
     pub identity_file: Option<PathBuf>,
 }
 
@@ -72,7 +71,6 @@ pub fn parse(raw: &str) -> Vec<SshHost> {
                         alias: alias.to_string(),
                         hostname: None,
                         user: None,
-                        port: None,
                         identity_file: None,
                     });
                 }
@@ -96,15 +94,6 @@ pub fn parse(raw: &str) -> Vec<SshHost> {
                 if let Some(v) = tokens.next() {
                     for h in current.iter_mut() {
                         h.user = Some(v.to_string());
-                    }
-                }
-            }
-            "port" => {
-                if let Some(v) = tokens.next()
-                    && let Ok(p) = v.parse::<u16>()
-                {
-                    for h in current.iter_mut() {
-                        h.port = Some(p);
                     }
                 }
             }
@@ -148,7 +137,6 @@ mod tests {
         assert_eq!(hosts[0].alias, "foo");
         assert_eq!(hosts[0].hostname.as_deref(), Some("1.2.3.4"));
         assert_eq!(hosts[0].user.as_deref(), Some("alice"));
-        assert_eq!(hosts[0].port, None);
     }
 
     #[test]
@@ -167,11 +155,12 @@ Host *
     }
 
     #[test]
-    fn case_insensitive_keys_and_port() {
-        let raw = "host web\n  hostname 203.0.113.1\n  PORT 2222\n";
+    fn case_insensitive_keys() {
+        let raw = "host web\n  HostName 203.0.113.1\n";
         let hosts = parse(raw);
         assert_eq!(hosts.len(), 1);
-        assert_eq!(hosts[0].port, Some(2222));
+        assert_eq!(hosts[0].alias, "web");
+        assert_eq!(hosts[0].hostname.as_deref(), Some("203.0.113.1"));
     }
 
     #[test]
@@ -247,7 +236,6 @@ Host relay
 Host web
     HostName 203.0.113.20
     User admin
-    Port 44456
 
 Host app 203.0.113.30
     HostName 203.0.113.30
@@ -257,7 +245,5 @@ Host app 203.0.113.30
         let hosts = parse(raw);
         let aliases: Vec<&str> = hosts.iter().map(|h| h.alias.as_str()).collect();
         assert_eq!(aliases, vec!["workstation", "relay", "web", "app"]);
-        let web = hosts.iter().find(|h| h.alias == "web").unwrap();
-        assert_eq!(web.port, Some(44456));
     }
 }

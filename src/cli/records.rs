@@ -243,7 +243,7 @@ pub(super) fn logs(args: &[String]) -> ExitCode {
 }
 
 /// Config logs that apply to this host's alias, plus per-OS builtins for any
-/// key not already taken by config (mirrors the TUI log picker).
+/// key not already taken by config.
 fn available_logs(cfg: &Config, h: &Host) -> Vec<Log> {
     let mut out: Vec<Log> = cfg
         .logs
@@ -300,34 +300,18 @@ fn follow_exec(alias: &str, path: &str, n: u32) -> ExitCode {
 
 /// One-shot tail snapshot.
 fn snapshot(alias: &str, path: &str, n: u32) -> ExitCode {
-    let remote = format!("tail -n {n} {}", crate::tmux::shell_quote(path));
-    let out = if alias == crate::tmux::LOCAL_ALIAS {
-        Command::new("sh").arg("-c").arg(&remote).output()
-    } else {
-        // `--`: end-of-options (see ssh::run::spawn_remote).
-        Command::new("ssh")
-            .arg("--")
-            .arg(alias)
-            .arg(&remote)
-            .output()
-    };
-    match out {
-        Ok(o) if o.status.success() => {
-            print!("{}", String::from_utf8_lossy(&o.stdout));
+    let cmd = format!("tail -n {n} {}", crate::tmux::shell_quote(path));
+    match crate::ssh::one_shot(alias, &cmd) {
+        Ok(out) => {
+            print!("{out}");
             ExitCode::SUCCESS
         }
-        Ok(o) => fail(&format!(
-            "tail exit {}: {}",
-            o.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&o.stderr).trim()
-        )),
-        Err(e) => fail(&format!("spawn failed: {e}")),
+        Err(e) => fail(&e),
     }
 }
 
 /// Unix seconds → `YYYY-MM-DD HH:MM` UTC. helm pulls in no date crate; this
-/// is Howard Hinnant's `civil_from_days`, the inverse of the converter in
-/// `inventory::health`.
+/// is Howard Hinnant's `civil_from_days` algorithm.
 fn fmt_unix_utc(ts: i64) -> String {
     let days = ts.div_euclid(86_400);
     let secs = ts.rem_euclid(86_400);
@@ -356,7 +340,7 @@ mod tests {
 
     #[test]
     fn fmt_unix_matches_known_timestamp() {
-        // 1_779_062_400 = 2026-05-18 00:00:00 UTC (per inventory::health tests)
+        // 1_779_062_400 = 2026-05-18 00:00:00 UTC
         assert_eq!(fmt_unix_utc(1_779_062_400), "2026-05-18 00:00");
         // 1_784_118_896 = 2026-07-15 12:34:56 UTC
         assert_eq!(fmt_unix_utc(1_784_118_896), "2026-07-15 12:34");

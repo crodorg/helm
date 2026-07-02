@@ -1,16 +1,15 @@
 //! SQLite-backed history of agent and operator command runs.
 //!
-//! Both `helm exec` traffic (agent) and TUI Runner submissions (operator)
+//! Both `helm exec` traffic (agent) and `helm run` submissions (operator)
 //! land in the same `runs` table tagged by `source`. Lines are stored in
 //! a child table keyed on `(run_id, seq)` so the original order is
 //! recoverable without depending on rowid.
 //!
 //! Writes happen in a single transaction at run completion: one `runs`
 //! insert plus one bulk insert of every transcript line. This trades the
-//! "live streaming to disk" property for a simpler model and avoids
-//! interleaving DB I/O with UI render ticks. If helm crashes mid-run, the
-//! in-flight run is lost — the in-memory `agent_history` ring captures
-//! everything for the current session.
+//! "live streaming to disk" property for a simpler model and keeps DB I/O
+//! off the run's hot path. If helm crashes mid-run, the in-flight run is
+//! lost — only completed runs are persisted.
 //!
 //! Schema is created idempotently in `open()` (single migration; future
 //! columns add via ALTER TABLE in a versioned `schema_version` row).

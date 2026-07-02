@@ -2,8 +2,8 @@
 //!
 //! Helm shells out to `ssh` for connections; that means key auth happens via
 //! whatever the agent has loaded. This module checks which IdentityFile paths
-//! the user's hosts depend on and whether the agent already holds them, so the
-//! UI can warn at startup instead of blocking inside the runner.
+//! the user's hosts depend on and whether the agent already holds them, so helm
+//! can warn up front instead of blocking inside the runner.
 //!
 //! Strategy:
 //! 1. Run `ssh-add -l` → set of loaded fingerprints. Also detect the
@@ -150,8 +150,8 @@ fn parse_ssh_keygen_lf(stdout: &str) -> Option<String> {
 }
 
 /// Render a multi-line blocking message for the terminal. Returned when the
-/// agent state is not Ok — caller should print this and exit before the TUI
-/// touches the terminal. Lists copy-pasteable `ssh-add` commands.
+/// agent state is not Ok — caller should print this and exit before running
+/// the command. Lists copy-pasteable `ssh-add` commands.
 pub fn render_blocker(status: &AgentStatus, ssh_hosts: &[SshHost]) -> Option<String> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     render_blocker_with_home(status, ssh_hosts, home.as_deref())
@@ -238,38 +238,6 @@ fn tildify(p: &Path, home: Option<&Path>) -> String {
     p.display().to_string()
 }
 
-/// Render a one-line warning suitable for the footer status bar.
-#[allow(dead_code)]
-pub fn status_message(s: &AgentStatus) -> Option<String> {
-    match s {
-        AgentStatus::Ok => None,
-        AgentStatus::AgentUnreachable => {
-            Some("ssh-agent unreachable: eval $(ssh-agent) && ssh-add".into())
-        }
-        AgentStatus::SshAddMissing => Some("ssh-add not on PATH".into()),
-        AgentStatus::MissingKeys(ks) => {
-            let mut parts: Vec<String> = ks
-                .iter()
-                .map(|m| {
-                    format!(
-                        "{} ({})",
-                        m.identity_file
-                            .file_name()
-                            .map(|s| s.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| m.identity_file.display().to_string()),
-                        m.used_by.join(",")
-                    )
-                })
-                .collect();
-            parts.sort();
-            Some(format!(
-                "ssh-agent missing: {} — run ssh-add",
-                parts.join("; ")
-            ))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,23 +270,6 @@ mod tests {
     }
 
     #[test]
-    fn status_message_formats_missing() {
-        let s = AgentStatus::MissingKeys(vec![MissingKey {
-            identity_file: PathBuf::from("/home/user/.ssh/id_ed25519_vps"),
-            used_by: vec!["vps1".into(), "vps2".into(), "vps3".into()],
-        }]);
-        let msg = status_message(&s).unwrap();
-        assert!(msg.contains("id_ed25519_vps"));
-        assert!(msg.contains("vps1,vps2,vps3"));
-        assert!(msg.contains("ssh-add"));
-    }
-
-    #[test]
-    fn status_message_none_when_ok() {
-        assert!(status_message(&AgentStatus::Ok).is_none());
-    }
-
-    #[test]
     fn render_blocker_none_when_ok() {
         assert!(render_blocker(&AgentStatus::Ok, &[]).is_none());
     }
@@ -346,14 +297,12 @@ mod tests {
                 alias: "vps1".into(),
                 hostname: Some("1.2.3.4".into()),
                 user: Some("admin".into()),
-                port: None,
                 identity_file: Some(PathBuf::from("/home/user/.ssh/id_ed25519_vps")),
             },
             SshHost {
                 alias: "workstation".into(),
                 hostname: Some("192.168.1.31".into()),
                 user: Some("admin".into()),
-                port: None,
                 identity_file: Some(PathBuf::from("/home/user/.ssh/id_ed25519")),
             },
         ];

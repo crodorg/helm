@@ -70,8 +70,7 @@ pub struct ActivityRecord {
     /// Always empty for kinds that don't read output.
     pub output_preview: String,
     /// True when `cmd` mentions `doas` or `sudo` as a whole-word token —
-    /// rendered with a `[DOAS]` badge in the TUI so privilege escalation
-    /// is impossible to miss.
+    /// `helm activity` flags these so privilege escalation is easy to spot.
     pub has_privilege_escalation: bool,
     /// `None` while the action is in flight, `Some` once it finishes. CLI
     /// hooks write one record on completion so this is always populated.
@@ -175,7 +174,7 @@ pub fn append(record: &ActivityRecord) {
 }
 
 /// Read the tail of the log. Returns the last `limit` records (chronological
-/// order — oldest first). Used by the AgentTail pane.
+/// order — oldest first). Backs `helm activity`.
 pub fn tail(limit: usize) -> Vec<ActivityRecord> {
     let Some(path) = log_path() else {
         return Vec::new();
@@ -264,10 +263,10 @@ pub fn preview(s: &str) -> String {
 /// Best-effort getter for the current process's parent PID; used only as
 /// metadata in the log.
 pub fn ppid() -> u32 {
-    // Fall back to 0 on platforms where the syscall isn't reachable.
+    // Fall back to 0 on platforms where it isn't reachable.
     #[cfg(unix)]
-    unsafe {
-        libc::getppid() as u32
+    {
+        std::os::unix::process::parent_id()
     }
     #[cfg(not(unix))]
     {

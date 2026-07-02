@@ -1,13 +1,13 @@
 //! `helm run <key> <host>` — fire a configured `[[shortcuts]]` command on a
 //! host. Shortcuts run arbitrary operator-defined commands, so this is a
 //! gated mutation: it refuses without `--yes`, keeping it off the un-gated
-//! agent surface. Executes via a direct ssh spawn (no daemon) and streams
-//! output as it arrives.
+//! agent surface. Runs through the shared `stream_and_record` (a direct ssh
+//! spawn, no daemon): output streams live and the run lands in history.db under
+//! the `operator` source.
 
 use std::process::ExitCode;
 
-use crate::activity::ActivityKind;
-use crate::ssh::{RunEvent, RunHandle, spawn_remote};
+use crate::history::RunSource;
 
 use super::{fail, merged_config, resolve_host, usage};
 
@@ -60,67 +60,5 @@ pub(super) fn run(args: &[String]) -> ExitCode {
 
     let alias = h.ssh_alias.clone();
     let cmd = sc.cmd.clone();
-    let handle = match spawn_remote(&alias, &cmd) {
-        Ok(h) => h,
-        Err(e) => return fail(&format!("spawn failed: {e}")),
-    };
-    let exit = drain(handle);
-    crate::log_action(ActivityKind::Exec, &alias, "", &cmd, "", Some(exit));
-    ExitCode::from(clamp_exit(exit))
-}
-
-/// Block on the command's event stream, printing output live. `helm run`
-/// can't answer an interactive password prompt (no TTY, no modal), so it
-/// flags one and points the operator at `helm shell` instead.
-fn drain(mut handle: RunHandle) -> i32 {
-    let mut exit = 1;
-    while let Ok(ev) = handle.rx.recv() {
-        match ev {
-            RunEvent::Out(line) => println!("{line}"),
-            RunEvent::Err(line) => eprintln!("{line}"),
-            RunEvent::Partial(text) => eprint!("{text}"),
-            RunEvent::NeedPassword => {
-                // No TTY or modal to answer with. Close stdin so the remote
-                // `doas`/`sudo` gets EOF and fails fast — otherwise it blocks
-                // on the PTY and this loop never sees `Done` (deadlock).
-                eprintln!(
-                    "\nhelm: password prompt detected — `helm run` can't answer it; \
-                     closing input (the command will fail). Use `helm shell open {}` \
-                     for interactive auth.",
-                    handle.alias
-                );
-                handle.close_stdin();
-            }
-            RunEvent::Done(code) => exit = code,
-            RunEvent::Error(msg) => {
-                eprintln!("helm: {msg}");
-                exit = 1;
-            }
-        }
-    }
-    exit
-}
-
-/// Clamp a raw exit integer (possibly negative from a signal death) into a
-/// process exit byte, mirroring `helm exec`'s 130-on-out-of-range rule.
-fn clamp_exit(code: i32) -> u8 {
-    if (0..=255).contains(&code) {
-        code as u8
-    } else {
-        130
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn clamp_exit_maps_out_of_range_to_130() {
-        assert_eq!(clamp_exit(0), 0);
-        assert_eq!(clamp_exit(1), 1);
-        assert_eq!(clamp_exit(255), 255);
-        assert_eq!(clamp_exit(-1), 130);
-        assert_eq!(clamp_exit(256), 130);
-    }
+    crate::stream_and_record("helm run", RunSource::Operator, &alias, &cmd)
 }

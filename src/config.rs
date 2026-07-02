@@ -28,14 +28,14 @@ pub struct Config {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Log {
-    /// Single key that selects this log from the picker overlay.
+    /// Single-key selector for this log (`helm logs <host> <key>`).
     pub key: char,
-    /// Human label shown in the picker and the tail pane header.
+    /// Human label shown in the `helm logs` list.
     pub label: String,
     /// Absolute path on the remote host. Tailed via `ssh -tt <alias> tail -F <path>`.
     pub path: String,
     /// ssh_alias values this log applies to. Empty = applies to every host.
-    /// Helm filters the picker by the currently selected host.
+    /// Helm filters `helm logs` output by the requested host.
     #[serde(default)]
     pub hosts: Vec<String>,
 }
@@ -46,9 +46,9 @@ impl Log {
     }
 }
 
-/// Per-OS built-in log defaults — always shown in the picker for the
-/// selected host so a fresh install with no `[[logs]]` config still has
-/// something useful on `l`. Tail paths are conservative — they all
+/// Per-OS built-in log defaults — always shown by `helm logs` for the
+/// host so a fresh install with no `[[logs]]` config still has something
+/// useful to tail. Tail paths are conservative — they all
 /// exist out of the box on the listed OS — but the operator is expected
 /// to add their own `[[logs]]` entries for app-specific files.
 pub fn builtin_logs(os: OsFamily) -> Vec<Log> {
@@ -108,7 +108,7 @@ pub struct Host {
     #[serde(default)]
     pub provider: Provider,
     /// OS family — drives which service manager (`rcctl`, `systemctl`,
-    /// `launchctl`) the Services pane shells out to. Defaults to OpenBSD
+    /// `launchctl`) `helm services` shells out to. Defaults to OpenBSD
     /// because helm grew up on an OpenBSD fleet; set explicitly in
     /// `config.toml` for Linux / macOS hosts.
     #[serde(default)]
@@ -229,15 +229,12 @@ pub struct Business {
     pub deploy_cmd: String,
     #[serde(default)]
     pub notes: String,
-    /// Optional Stripe Connect account id (e.g. `acct_1NxxxYYY`). When
-    /// set, the Browse detail panel labels this business as Stripe-linked.
-    /// Per-account balance fetch is deferred — the `m` pane still shows
-    /// the fleet-wide Stripe view.
+    /// Optional Stripe Connect account id (e.g. `acct_1NxxxYYY`). Surfaced
+    /// in `helm show --json` as `stripe_account_id`.
     #[serde(default)]
     pub stripe_account_id: Option<String>,
-    /// Optional Mercury account id from `mercury-pp-cli accounts`. When
-    /// set, the Browse detail panel pulls this account's available +
-    /// current balance from the money cache and renders it inline.
+    /// Optional Mercury account id from `mercury-pp-cli accounts`. Surfaced
+    /// in `helm show --json` as `mercury_account_id`.
     #[serde(default)]
     pub mercury_account_id: Option<String>,
     /// Optional Postmark server token (per Postmark "server", i.e. per
@@ -509,7 +506,6 @@ mod tests {
             alias: "vps1".into(),
             hostname: Some("203.0.113.10".into()),
             user: Some("admin".into()),
-            port: None,
             identity_file: None,
         }]);
         assert_eq!(cfg.hosts.len(), 1);
@@ -528,14 +524,12 @@ mod tests {
                 alias: "relay".into(),
                 hostname: Some("192.168.1.1".into()),
                 user: Some("admin".into()),
-                port: None,
                 identity_file: None,
             },
             SshHost {
                 alias: "vps1".into(),
                 hostname: Some("203.0.113.10".into()),
                 user: Some("admin".into()),
-                port: None,
                 identity_file: None,
             },
         ]);
@@ -560,14 +554,12 @@ mod tests {
                 alias: "relay-git".into(),
                 hostname: Some("192.168.1.1".into()),
                 user: Some("git".into()),
-                port: None,
                 identity_file: None,
             },
             SshHost {
                 alias: "relay".into(),
                 hostname: Some("192.168.1.1".into()),
                 user: Some("admin".into()),
-                port: None,
                 identity_file: None,
             },
         ]);
@@ -590,21 +582,18 @@ mod tests {
                 alias: "laptop".into(),
                 hostname: Some("laptop.lan".into()),
                 user: Some("you".into()),
-                port: None,
                 identity_file: None,
             },
             SshHost {
                 alias: "linux-vps".into(),
                 hostname: Some("203.0.113.20".into()),
                 user: Some("deploy".into()),
-                port: None,
                 identity_file: None,
             },
             SshHost {
                 alias: "obsd".into(),
                 hostname: Some("203.0.113.30".into()),
                 user: Some("admin".into()),
-                port: None,
                 identity_file: None,
             },
         ]);
@@ -634,7 +623,6 @@ mod tests {
             alias: "laptop".into(),
             hostname: Some("laptop.lan".into()),
             user: None,
-            port: None,
             identity_file: None,
         }]);
         let laptop = cfg.hosts.iter().find(|h| h.name == "laptop").unwrap();
