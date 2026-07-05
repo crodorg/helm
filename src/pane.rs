@@ -13,9 +13,13 @@
 //! string are kept byte-for-byte identical to what the helm-shell skill has
 //! always documented, because the operator's `~/.tmux.conf` (a
 //! `window-layout-changed` cleanup hook, a status-bar `@helm_here` fragment) is
-//! a contract keyed on those exact names. `close` only kills the pane and lets
-//! that hook drop the markers — which also covers panes closed by hand — with a
-//! belt-and-suspenders teardown for configs that lack the hook.
+//! a contract keyed on those exact names. `close` kills the pane and then
+//! reconciles the markers UNCONDITIONALLY (see `sweep_markers`): whether or not
+//! a labelled pane was found, if no tagged pane remains it drops `@helm_here`
+//! and the border options. That belt-and-suspenders teardown covers configs
+//! lacking the hook and, crucially, the case the hook can't catch — a pane
+//! closed/untagged by hand, where no layout change fires. `reconcile` exposes
+//! the same sweep as a standalone verb to self-heal an orphaned ⚓ anchor.
 
 use std::process::{Command, ExitCode, Stdio};
 
@@ -65,6 +69,7 @@ pub(crate) fn run_cli(args: &[String]) -> ExitCode {
         "key" => cmd_key(rest),
         "read" => cmd_read(rest),
         "close" => cmd_close(rest),
+        "reconcile" => cmd_reconcile(rest),
         "list" => cmd_list(rest),
         other => {
             eprintln!("helm pane: unknown subcommand `{other}`");
@@ -106,6 +111,8 @@ usage:
                                                    200 lines, trailing blanks
                                                    stripped unless --raw)
   helm pane close [-l LABEL]                        kill the drivable pane
+  helm pane reconcile                              clear an orphaned ⚓ anchor
+                                                   (no pane left to justify it)
   helm pane list                                   list helm panes here
 
 Close a viewport by killing its remote session with `helm shell close <target>`."
@@ -203,6 +210,44 @@ fn find_tagged(win: &str, opt: &str, val: &str) -> Result<Option<String>> {
         .map(str::trim)
         .find(|s| !s.is_empty())
         .map(String::from))
+}
+
+/// True when `list-panes` output (one `@helm_label<TAB>@helm_viewport` row per
+/// pane) still contains at least one tagged pane — i.e. the window markers are
+/// still justified. Pure so the teardown decision is testable.
+fn window_has_helm_pane(raw: &str) -> bool {
+    raw.lines().any(|line| {
+        let mut it = line.splitn(2, '\t');
+        let label = it.next().unwrap_or("").trim();
+        let view = it.next().unwrap_or("").trim();
+        !label.is_empty() || !view.is_empty()
+    })
+}
+
+/// Reconcile the window markers with reality: if no tagged pane (drivable or
+/// viewport) remains in `win`, drop `@helm_here` and the border options so the
+/// operator's status bar stops drawing an orphaned ⚓ anchor. Returns whether
+/// the markers were cleared. Idempotent — safe to call when nothing is stale.
+///
+/// This mirrors the operator's `window-layout-changed` hook for configs that
+/// lack it, and — crucially — runs on `close` even when the labelled pane is
+/// already gone or untagged, which is exactly the case the hook can't catch
+/// (losing a pane option isn't a layout change, so the hook never fires).
+fn sweep_markers(win: &str) -> Result<bool> {
+    let raw = tmux_capture(&[
+        "list-panes",
+        "-t",
+        win,
+        "-F",
+        "#{@helm_label}\t#{@helm_viewport}",
+    ])?;
+    if window_has_helm_pane(&raw) {
+        return Ok(false);
+    }
+    for opt in ["@helm_here", "pane-border-status", "pane-border-format"] {
+        let _ = tmux_act(&["set-option", "-w", "-t", win, "-u", opt]);
+    }
+    Ok(true)
 }
 
 /// Install the window-level markers the operator's tmux config renders.
@@ -523,29 +568,44 @@ fn cmd_close(args: &[String]) -> Result<ExitCode> {
     let anchor = current_pane()?;
     let win = window_of(&anchor)?;
     let tag = label_tag(o.label.as_deref())?;
-    let Some(pane) = find_tagged(&win, "@helm_label", &tag)? else {
-        bail!("no helm pane labelled {tag} in this window");
-    };
-    tmux_act(&["kill-pane", "-t", &pane])?;
-    // The operator's `window-layout-changed` hook owns marker teardown (it
-    // fires for hand-closed panes too). Mirror it here for configs without the
-    // hook: if no tagged pane (drivable or viewport) remains, drop the markers.
-    let remaining = tmux_capture(&[
-        "list-panes",
-        "-t",
-        &win,
-        "-f",
-        "#{||:#{!=:#{@helm_label},},#{!=:#{@helm_viewport},}}",
-        "-F",
-        "x",
-    ])?;
-    if remaining.trim().is_empty() {
-        for opt in ["@helm_here", "pane-border-status", "pane-border-format"] {
-            let _ = tmux_act(&["set-option", "-w", "-t", &win, "-u", opt]);
+    // Kill the labelled pane if it's still there, but reconcile the window
+    // markers UNCONDITIONALLY. If the pane is already gone or untagged, we must
+    // not bail before the sweep — that's the orphaned-⚓ bug: `@helm_here` stays
+    // set with no pane to justify it, and the layout-changed hook can't clear
+    // it (a lost pane option isn't a layout change).
+    match find_tagged(&win, "@helm_label", &tag)? {
+        Some(pane) => {
+            tmux_act(&["kill-pane", "-t", &pane])?;
+            sweep_markers(&win)?;
+            log_pane(ActivityKind::ShellClose, &tag, "close", Some(0));
+            eprintln!("helm: closed pane {tag}");
+        }
+        None => {
+            let cleared = sweep_markers(&win)?;
+            log_pane(ActivityKind::ShellClose, &tag, "close", Some(0));
+            if cleared {
+                eprintln!("helm: no pane {tag}; cleared orphaned window markers");
+            } else {
+                eprintln!("helm: no pane labelled {tag} in this window");
+            }
         }
     }
-    log_pane(ActivityKind::ShellClose, &tag, "close", Some(0));
-    eprintln!("helm: closed pane {tag}");
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Reconcile the current window's markers with reality — self-heal a window
+/// whose ⚓ anchor was orphaned (e.g. a helm pane closed by hand on a config
+/// without the `window-layout-changed` hook). No panes are touched.
+fn cmd_reconcile(_args: &[String]) -> Result<ExitCode> {
+    let anchor = current_pane()?;
+    let win = window_of(&anchor)?;
+    let cleared = sweep_markers(&win)?;
+    log_pane(ActivityKind::ShellClose, "", "reconcile", Some(0));
+    if cleared {
+        eprintln!("helm: cleared orphaned window markers");
+    } else {
+        eprintln!("helm: markers already consistent");
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -604,150 +664,5 @@ fn render_pane_list(raw: &str) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_pane_run_reads_label_timeout_and_body() {
-        let a: Vec<String> = ["-l", "logs", "--timeout", "5", "tail", "-f", "x"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let (label, cmd, timeout) = parse_pane_run(&a).unwrap();
-        assert_eq!(label.as_deref(), Some("logs"));
-        assert_eq!(cmd, "tail -f x"); // a `-f` in the body is not a flag
-        assert_eq!(timeout, 5);
-
-        let b: Vec<String> = vec!["uptime".to_string()];
-        let (label2, cmd2, t2) = parse_pane_run(&b).unwrap();
-        assert!(label2.is_none());
-        assert_eq!(cmd2, "uptime");
-        assert_eq!(t2, runcmd::DEFAULT_RUN_TIMEOUT_SECS);
-
-        assert!(parse_pane_run(&Vec::new()).is_err());
-        assert!(parse_pane_run(&["a\nb".to_string()]).is_err());
-        let bad: Vec<String> = ["--timeout", "0", "x"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        assert!(parse_pane_run(&bad).is_err());
-    }
-
-    #[test]
-    fn viewport_command_embeds_socket_when_present() {
-        assert_eq!(
-            viewport_command(Some("/tmp/a.sock"), "web"),
-            "SSH_AUTH_SOCK=/tmp/a.sock helm shell open web"
-        );
-        // Empty / absent socket → no SSH_AUTH_SOCK prefix.
-        assert_eq!(viewport_command(Some(""), "web"), "helm shell open web");
-        assert_eq!(viewport_command(None, "web"), "helm shell open web");
-        // A target with a label is quoted intact.
-        assert_eq!(
-            viewport_command(None, "web:diag"),
-            "helm shell open web:diag"
-        );
-    }
-
-    #[test]
-    fn render_pane_list_keeps_only_tagged_panes() {
-        let raw = "%0\t\t\n%1\thelm\t\n%2\t\tweb\n%3\thelm-logs\t\n";
-        let rows = render_pane_list(raw);
-        assert_eq!(
-            rows,
-            vec![
-                "helm\tdrivable\t%1".to_string(),
-                "web\tviewport\t%2".to_string(),
-                "helm-logs\tdrivable\t%3".to_string(),
-            ]
-        );
-        assert!(render_pane_list("").is_empty());
-    }
-
-    #[test]
-    fn label_tag_maps_like_the_skill() {
-        assert_eq!(label_tag(None).unwrap(), "helm");
-        assert_eq!(label_tag(Some("")).unwrap(), "helm");
-        assert_eq!(label_tag(Some("logs")).unwrap(), "helm-logs");
-        assert!(label_tag(Some("a:b")).is_err());
-    }
-
-    #[test]
-    fn tag_filter_builds_the_tmux_predicate() {
-        assert_eq!(
-            tag_filter("@helm_label", "helm"),
-            "#{==:#{@helm_label},helm}"
-        );
-        assert_eq!(
-            tag_filter("@helm_viewport", "web"),
-            "#{==:#{@helm_viewport},web}"
-        );
-    }
-
-    #[test]
-    fn parse_opts_reads_flags_and_positionals() {
-        let a: Vec<String> = ["-l", "logs", "--size", "30", "--below", "web"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let o = parse_opts(&a).unwrap();
-        assert_eq!(o.label.as_deref(), Some("logs"));
-        assert_eq!(o.size, Some(30));
-        assert!(o.below);
-        assert_eq!(o.positional, vec!["web".to_string()]);
-    }
-
-    #[test]
-    fn parse_opts_read_flags() {
-        let a: Vec<String> = ["-n", "50", "--raw"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let o = parse_opts(&a).unwrap();
-        assert_eq!(o.lines, Some(50));
-        assert!(o.raw);
-    }
-
-    #[test]
-    fn parse_opts_rejects_missing_value() {
-        let a: Vec<String> = vec!["-l".to_string()];
-        assert!(parse_opts(&a).is_err());
-    }
-
-    #[test]
-    fn parse_opts_rejects_bad_numbers() {
-        let bad_size: Vec<String> = ["--size", "x"].iter().map(|s| s.to_string()).collect();
-        assert!(parse_opts(&bad_size).is_err());
-        let bad_n: Vec<String> = ["-n", "nope"].iter().map(|s| s.to_string()).collect();
-        assert!(parse_opts(&bad_n).is_err());
-        // `-n 0` would become `-S -0` (the whole visible pane), not "0 lines";
-        // reject it like a non-numeric value so the message holds true.
-        let zero_n: Vec<String> = ["-n", "0"].iter().map(|s| s.to_string()).collect();
-        assert!(parse_opts(&zero_n).is_err());
-        let missing: Vec<String> = vec!["--size".to_string()];
-        assert!(parse_opts(&missing).is_err());
-    }
-
-    #[test]
-    fn split_leading_label_consumes_only_a_leading_flag() {
-        let a: Vec<String> = ["-l", "logs", "tail", "-f", "x"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let (label, rest) = split_leading_label(&a).unwrap();
-        assert_eq!(label.as_deref(), Some("logs"));
-        // A `-f` in the body is preserved verbatim, not parsed as a flag.
-        assert_eq!(
-            rest,
-            &["tail".to_string(), "-f".to_string(), "x".to_string()]
-        );
-    }
-
-    #[test]
-    fn split_leading_label_absent_keeps_all_args() {
-        let a: Vec<String> = ["echo", "-n", "hi"].iter().map(|s| s.to_string()).collect();
-        let (label, rest) = split_leading_label(&a).unwrap();
-        assert!(label.is_none());
-        assert_eq!(rest.len(), 3);
-    }
-}
+#[path = "pane_tests.rs"]
+mod tests;
