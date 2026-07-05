@@ -48,7 +48,7 @@ fn viewport_command_embeds_socket_when_present() {
 
 #[test]
 fn render_pane_list_keeps_only_tagged_panes() {
-    let raw = "%0\t\t\n%1\thelm\t\n%2\t\tweb\n%3\thelm-logs\t\n";
+    let raw = "%0\t\t\t\n%1\thelm\t\t\n%2\t\tweb\t\n%3\thelm-logs\t\t\n%4\t\t\tbuild\n";
     let rows = render_pane_list(raw);
     assert_eq!(
         rows,
@@ -56,6 +56,7 @@ fn render_pane_list_keeps_only_tagged_panes() {
             "helm\tdrivable\t%1".to_string(),
             "web\tviewport\t%2".to_string(),
             "helm-logs\tdrivable\t%3".to_string(),
+            "build\tbackground\t%4".to_string(),
         ]
     );
     assert!(render_pane_list("").is_empty());
@@ -71,8 +72,11 @@ fn window_has_helm_pane_detects_any_tagged_pane() {
     assert!(window_has_helm_pane("\t\nhelm\t\n"));
     // A viewport alone also justifies them.
     assert!(window_has_helm_pane("\tweb\n"));
+    // A background pane alone also justifies them (keeps @helm_here alive
+    // while a pi-bg job runs, even with no drivable/viewport pane).
+    assert!(window_has_helm_pane("\t\tbuild\n"));
     // Whitespace-only fields don't count.
-    assert!(!window_has_helm_pane("   \t  \n"));
+    assert!(!window_has_helm_pane("   \t  \t  \n"));
 }
 
 #[test]

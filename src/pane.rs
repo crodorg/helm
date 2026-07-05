@@ -39,10 +39,11 @@ fn log_pane(kind: ActivityKind, tag: &str, cmd: &str, exit: Option<i32>) {
     crate::log_action(kind, "pane", tag, cmd, "", exit);
 }
 
-/// The window border format. IDENTICAL to the helm-shell skill's — the
-/// operator's tmux config renders `@helm_label`/`@helm_viewport` with it, so
-/// it must not drift.
-const BORDER_FORMAT: &str = "#{?#{@helm_label}, #[fg=cyan]⚓ #{@helm_label}#[default] ,#{?#{@helm_viewport}, #[fg=yellow]👁 #{@helm_viewport}#[default] , #{pane_index}: #{pane_title} }}";
+/// The window border format. IDENTICAL to the helm-shell skill's AND the
+/// `pi-bg` extension's copy (which sets it so background panes render ⚙ even
+/// when no helm-managed pane exists) — the operator's tmux config renders
+/// `@helm_label`/`@helm_viewport`/`@helm_bg` with it, so it must not drift.
+const BORDER_FORMAT: &str = "#{?#{@helm_label}, #[fg=cyan]⚓ #{@helm_label}#[default] ,#{?#{@helm_viewport}, #[fg=yellow]👁 #{@helm_viewport}#[default] ,#{?#{@helm_bg}, #[fg=magenta]⚙ #{@helm_bg}#[default] , #{pane_index}: #{pane_title} }}}";
 
 pub(crate) fn run_cli(args: &[String]) -> ExitCode {
     let Some(sub) = args.first() else {
@@ -212,20 +213,23 @@ fn find_tagged(win: &str, opt: &str, val: &str) -> Result<Option<String>> {
         .map(String::from))
 }
 
-/// True when `list-panes` output (one `@helm_label<TAB>@helm_viewport` row per
-/// pane) still contains at least one tagged pane — i.e. the window markers are
-/// still justified. Pure so the teardown decision is testable.
+/// True when `list-panes` output (one `@helm_label<TAB>@helm_viewport<TAB>@helm_bg`
+/// row per pane) still contains at least one tagged pane — i.e. the window
+/// markers are still justified. Includes background (`@helm_bg`) panes so a
+/// running pi-bg job keeps `@helm_here` (and thus the border) alive even when
+/// no drivable/viewport pane remains. Pure so the teardown decision is testable.
 fn window_has_helm_pane(raw: &str) -> bool {
     raw.lines().any(|line| {
-        let mut it = line.splitn(2, '\t');
+        let mut it = line.splitn(3, '\t');
         let label = it.next().unwrap_or("").trim();
         let view = it.next().unwrap_or("").trim();
-        !label.is_empty() || !view.is_empty()
+        let bg = it.next().unwrap_or("").trim();
+        !label.is_empty() || !view.is_empty() || !bg.is_empty()
     })
 }
 
-/// Reconcile the window markers with reality: if no tagged pane (drivable or
-/// viewport) remains in `win`, drop `@helm_here` and the border options so the
+/// Reconcile the window markers with reality: if no tagged pane (drivable,
+/// viewport, or background) remains in `win`, drop `@helm_here` and the border options so the
 /// operator's status bar stops drawing an orphaned ⚓ anchor. Returns whether
 /// the markers were cleared. Idempotent — safe to call when nothing is stale.
 ///
@@ -239,7 +243,7 @@ fn sweep_markers(win: &str) -> Result<bool> {
         "-t",
         win,
         "-F",
-        "#{@helm_label}\t#{@helm_viewport}",
+        "#{@helm_label}\t#{@helm_viewport}\t#{@helm_bg}",
     ])?;
     if window_has_helm_pane(&raw) {
         return Ok(false);
@@ -617,7 +621,7 @@ fn cmd_list(_args: &[String]) -> Result<ExitCode> {
         "-t",
         &win,
         "-F",
-        "#{pane_id}\t#{@helm_label}\t#{@helm_viewport}",
+        "#{pane_id}\t#{@helm_label}\t#{@helm_viewport}\t#{@helm_bg}",
     ])?;
     let rows = render_pane_list(&out);
     if rows.is_empty() {
@@ -650,14 +654,17 @@ fn viewport_command(sock: Option<&str>, target: &str) -> String {
 fn render_pane_list(raw: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in raw.lines() {
-        let mut it = line.splitn(3, '\t');
+        let mut it = line.splitn(4, '\t');
         let id = it.next().unwrap_or("");
         let label = it.next().unwrap_or("");
         let view = it.next().unwrap_or("");
+        let bg = it.next().unwrap_or("");
         if !label.is_empty() {
             out.push(format!("{label}\tdrivable\t{id}"));
         } else if !view.is_empty() {
             out.push(format!("{view}\tviewport\t{id}"));
+        } else if !bg.is_empty() {
+            out.push(format!("{bg}\tbackground\t{id}"));
         }
     }
     out
