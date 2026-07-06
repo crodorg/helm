@@ -84,6 +84,7 @@ helm pane run   [-l LABEL] "<cmd>"                # run one command, get back it
 helm pane key   [-l LABEL] <key...>               # raw key specs (no Enter) — drive a local TUI
 helm pane read  [-l LABEL] [-n N] [--raw]         # capture (default 200, trailing blanks stripped)
 helm pane close [-l LABEL]                         # kill the drivable pane
+helm pane reconcile                                # clear an orphaned ⚓ anchor (no pane left)
 helm pane list                                     # list helm panes in this window
 ```
 
@@ -194,10 +195,11 @@ After a `doas` `send`, three states (read to disambiguate): **persistence hit** 
 
 When the operator wants a local shell, or wants to watch a remote session in-window, the pane lives in **the very window I'm running in**, on their own tmux. `helm pane` manages it for me — splitting, tagging, the visible border markers, and cleanup — so I never touch raw tmux. The pane persists with the operator's tmux session: it survives terminal crashes and comes along when they re-attach from another machine.
 
-Two kinds:
+Three kinds:
 
 - **Drivable pane** (`helm pane open/send/key/read/close`) — a local shell I type into. The default is the bare pane (`-l` omitted); `-l <label>` is a second pane (e.g. `-l logs` for a parked `tail -f` I read without blocking the main pane). Each label is its own pane, scoped to this window.
 - **Viewport pane** (`helm pane view <target>`) — a live client attached to a remote `helm shell` session (it runs `helm shell open <target>` under the hood, an ordinary read-write attach), so the operator watches the remote work live. **Read-only *to me*:** I never type into it — I drive the remote through `helm shell send/run/key` and the viewport shows it. The operator, though, *can* type into it — so it's where they enter a doas password or hit Ctrl-C, and since it's the same remote tty I drive, a password they type there also arms doas persistence for my next command. This is what auto-opens for remote work (opt out: "headless" / "in the background"). One viewport per target — `view` reuses an existing one.
+- **Background pane** (tagged `@helm_bg`, rendered ⚙ magenta) — a detached pane running a long-lived command, created by a *harness extension* (not by `helm pane`), for background jobs the operator watches. `helm pane` doesn't spawn or drive these; it only recognizes them: `helm pane list` shows a `background` row, and a running background pane keeps the window's ⚓ anchor and border alive after every drivable/viewport pane is gone. I don't type into them.
 
 Rules:
 
@@ -205,7 +207,8 @@ Rules:
 - **Auto-split, never adopt a stray pane.** `helm pane` only ever drives panes it tagged (`@helm_label`); an untagged pane could be running anything. Driving it is the kind of behind-the-back action this skill bans.
 - **Target fidelity.** `-l logs` is the `helm-logs` pane and only that — it never collapses to the bare pane, and the presence of other labeled panes is never a reason to reuse one.
 - **Default to ONE pane.** Spawn a labeled pane only when the operator asks; multiple panes fragment context and are easy to leave wedged in copy-mode. Close leftover labeled panes with `helm pane close -l <label>` at the next opportunity.
-- **Close** with `helm pane close [-l LABEL]` — kills the pane and (when no helm pane remains) drops the window markers; the operator's `~/.tmux.conf` hook also handles panes they close by hand. Closing + reopening purges scrollback — a cheap way to drop leaked secrets.
+- **Close** with `helm pane close [-l LABEL]` — kills the pane and then reconciles the window markers unconditionally: when no helm pane (drivable, viewport, or background) remains it drops `@helm_here` and the border, even if the labelled pane was already gone or untagged. The operator's `~/.tmux.conf` hook also handles panes they close by hand. Closing + reopening purges scrollback — a cheap way to drop leaked secrets.
+- **Reconcile** with `helm pane reconcile` — runs that same marker sweep on demand, touching no panes; use it to self-heal a window whose ⚓ anchor was orphaned (a pane closed by hand on a config without the layout-changed hook).
 - **Sizing/placement:** default is a 50/50 split to the right; `--below` for a horizontal split, `--size N` for a specific size.
 - **Copy-mode is self-service here** — if sends stop landing (same scrollback on repeated reads), the pane is in copy-mode; closing+reopening clears it (see *copy-mode* below).
 - **doas/sudo persistence** works per-pane — the pane is its own tty, and the operator can type a password right into it since it's in front of them.
