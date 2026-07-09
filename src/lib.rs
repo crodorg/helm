@@ -13,6 +13,7 @@ pub mod inventory;
 pub mod mosh;
 pub mod opts;
 pub mod pane;
+pub mod readcursor;
 pub mod runcmd;
 pub mod shell;
 pub mod ssh;

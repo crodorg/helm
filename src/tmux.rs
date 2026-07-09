@@ -287,6 +287,86 @@ pub fn capture(target: &str, lines: u32) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// A capture paired with the pane's `#{history_size}` at capture time —
+/// what `read --delta` needs to place lines on the absolute stream
+/// coordinate (history_size + visible row). See `crate::readcursor`.
+pub struct HistCapture {
+    pub hist: u64,
+    pub body: String,
+}
+
+/// Build the host-side script for a delta capture: read `#{history_size}`,
+/// echo it on a marker line, then capture — all in ONE runner invocation
+/// (one ssh round-trip for remote targets), so the start row is computed
+/// against the same history_size the capture sees and new lines arriving
+/// between two round-trips can't shift the coordinates.
+///
+/// With `prev_total` (a stored cursor), the start row `S` is the anchor
+/// line's row: `total - 1 - history_size`, clamped host-side to the history
+/// start (below) and the last visible row (above) — an out-of-range anchor
+/// then fails the caller's anchor check and triggers a reseed rather than a
+/// tmux error. Without it (seed mode), capture the last `lines` as a plain
+/// read would. Pure builder so the script shape is unit-tested.
+fn build_delta_script(tmux: &str, q_target: &str, prev_total: Option<u64>, lines: u32) -> String {
+    match prev_total {
+        Some(total) => format!(
+            "HV=$({tmux} display-message -p -t {q_target} '#{{history_size}} #{{pane_height}}'); \
+             H=${{HV% *}}; V=${{HV#* }}; \
+             S=$(( {total} - 1 - H )); \
+             [ \"$S\" -lt \"$(( 0 - H ))\" ] && S=$(( 0 - H )); \
+             [ \"$S\" -gt \"$(( V - 1 ))\" ] && S=$(( V - 1 )); \
+             printf '@@helm-delta:%s:@@\\n' \"$H\"; \
+             {tmux} capture-pane -t {q_target} -p -S \"$S\""
+        ),
+        None => format!(
+            "H=$({tmux} display-message -p -t {q_target} '#{{history_size}}'); \
+             printf '@@helm-delta:%s:@@\\n' \"$H\"; \
+             {tmux} capture-pane -t {q_target} -p -S -{lines}"
+        ),
+    }
+}
+
+/// Parse the delta-capture output: line 1 is the `@@helm-delta:<hist>:@@`
+/// marker printed by the runner (never pane content — it goes to the
+/// runner's stdout, not into the pane), the rest is the capture body.
+pub fn split_hist_capture(out: &str) -> Option<HistCapture> {
+    let (first, body) = out.split_once('\n')?;
+    let hist = first
+        .strip_prefix("@@helm-delta:")?
+        .strip_suffix(":@@")?
+        .parse()
+        .ok()?;
+    Some(HistCapture {
+        hist,
+        body: body.to_string(),
+    })
+}
+
+/// Capture for `read --delta` — `tmux_target` is a session name (`helm`,
+/// `helm-<label>`) for shell targets or a pane id (`%3`) for local panes;
+/// `alias` picks the tmux server (`local` = no ssh), mirroring `runcmd`.
+pub fn capture_delta(
+    alias: &str,
+    tmux_target: &str,
+    prev_total: Option<u64>,
+    lines: u32,
+) -> Result<HistCapture> {
+    let q_target = shell_quote(tmux_target);
+    let script = build_delta_script(&tmux_prefix(), &q_target, prev_total, lines);
+    let out = runner_cmd(alias, &script)
+        .output()
+        .context("spawn tmux delta-capture runner")?;
+    if !out.status.success() {
+        return Err(anyhow!(
+            "delta capture on {alias} failed (exit {}): {}",
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    split_hist_capture(&String::from_utf8_lossy(&out.stdout))
+        .ok_or_else(|| anyhow!("delta capture on {alias}: missing history marker in output"))
+}
+
 /// List helm-* sessions on the given alias's tmux server. Returns the
 /// user-facing target form for each (e.g. `vps1`, `vps1:deploy`, `local`,
 /// `local:agent`).
@@ -418,6 +498,42 @@ mod tests {
         c.get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect()
+    }
+
+    #[test]
+    fn delta_script_with_cursor_computes_and_clamps_start_row() {
+        let s = build_delta_script("tmux", "helm", Some(42), 200);
+        // One display-message read feeds both the marker and the row math.
+        assert!(s.contains("'#{history_size} #{pane_height}'"));
+        assert!(s.contains("S=$(( 42 - 1 - H ))"));
+        // Clamped below (history start) and above (last visible row).
+        assert!(s.contains("S=$(( 0 - H ))"));
+        assert!(s.contains("S=$(( V - 1 ))"));
+        assert!(s.contains("printf '@@helm-delta:%s:@@\\n'"));
+        assert!(s.contains("capture-pane -t helm -p -S \"$S\""));
+    }
+
+    #[test]
+    fn delta_script_seed_mode_captures_last_n() {
+        let s = build_delta_script("tmux", "helm", None, 200);
+        assert!(s.contains("'#{history_size}'"));
+        assert!(s.contains("capture-pane -t helm -p -S -200"));
+        assert!(s.contains("@@helm-delta:%s:@@"));
+    }
+
+    #[test]
+    fn split_hist_capture_parses_marker_and_body() {
+        let h = split_hist_capture("@@helm-delta:512:@@\nline a\nline b\n").unwrap();
+        assert_eq!(h.hist, 512);
+        assert_eq!(h.body, "line a\nline b\n");
+        // Empty capture body (fresh pane).
+        let h = split_hist_capture("@@helm-delta:0:@@\n").unwrap();
+        assert_eq!(h.hist, 0);
+        assert_eq!(h.body, "");
+        // Missing/garbled marker → None.
+        assert!(split_hist_capture("line a\nline b\n").is_none());
+        assert!(split_hist_capture("@@helm-delta:x:@@\nbody\n").is_none());
+        assert!(split_hist_capture("").is_none());
     }
 
     #[test]

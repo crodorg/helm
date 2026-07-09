@@ -28,6 +28,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use crate::activity::ActivityKind;
 use crate::config::Config;
 use crate::opts;
+use crate::readcursor;
 use crate::runcmd::{self, strip_trailing_blank};
 use crate::tmux;
 
@@ -108,9 +109,12 @@ usage:
    [--timeout SECS]                                output + `exit: N`
   helm pane key  [-l LABEL] <key...>               send raw key specs (Up,
                                                    C-c, Escape; no Enter)
-  helm pane read [-l LABEL] [-n N] [--raw]         capture the pane (default
+  helm pane read [-l LABEL] [-n N] [--raw|--delta] capture the pane (default
                                                    200 lines, trailing blanks
-                                                   stripped unless --raw)
+                                                   stripped unless --raw).
+                                                   --delta prints only lines
+                                                   NEW since the previous
+                                                   --delta read (-n caps them)
   helm pane close [-l LABEL]                        kill the drivable pane
   helm pane reconcile                              clear an orphaned ⚓ anchor
                                                    (no pane left to justify it)
@@ -345,6 +349,7 @@ struct Opts {
     size: Option<u32>,
     lines: Option<u32>,
     raw: bool,
+    delta: bool,
     positional: Vec<String>,
 }
 
@@ -383,6 +388,10 @@ fn parse_opts(args: &[String]) -> Result<Opts> {
             }
             "--raw" => {
                 o.raw = true;
+                i += 1;
+            }
+            "--delta" => {
+                o.delta = true;
                 i += 1;
             }
             other => {
@@ -556,6 +565,21 @@ fn cmd_read(args: &[String]) -> Result<ExitCode> {
     let tag = label_tag(o.label.as_deref())?;
     let pane = ensure_drivable(&win, &anchor, &tag, false, None)?;
     let n = o.lines.unwrap_or(tmux::DEFAULT_CAPTURE_LINES);
+    if o.delta {
+        if o.raw {
+            bail!("--delta and --raw are mutually exclusive");
+        }
+        let key = readcursor::key_pane(&pane);
+        let res = readcursor::delta_read(tmux::LOCAL_ALIAS, &pane, &key, n)?;
+        if let Some(note) = res.note(n) {
+            eprintln!("helm: {note}");
+        }
+        if !res.stdout().is_empty() {
+            println!("{}", res.stdout());
+        }
+        log_pane(ActivityKind::ShellRead, &tag, "--delta", Some(0));
+        return Ok(ExitCode::SUCCESS);
+    }
     let neg = format!("-{n}");
     let raw_out = tmux_capture(&["capture-pane", "-t", &pane, "-p", "-S", &neg])?;
     if o.raw {

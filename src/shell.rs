@@ -7,6 +7,7 @@ use crate::activity;
 use crate::config::Config;
 use crate::log_action;
 use crate::opts;
+use crate::readcursor;
 use crate::runcmd;
 use crate::tmux;
 
@@ -40,9 +41,12 @@ usage:
                                       Up Down C-c Escape F1 … to drive a
                                       TUI (vim, htop, menus) on the host
   helm shell read <target> [-n LINES] capture the active pane's
-   [--raw]                            scrollback (default 200; trailing
+   [--raw | --delta]                  scrollback (default 200; trailing
                                       blank padding stripped unless
-                                      --raw); creates if missing
+                                      --raw); creates if missing.
+                                      --delta prints only lines NEW since
+                                      the previous --delta read (-n caps
+                                      them); first/lost cursor = full read
   helm shell list <alias>             list helm-* sessions on the
                                       alias's tmux server (use `local`
                                       for your own machine)
@@ -413,14 +417,16 @@ struct ReadArgs {
     target: String,
     lines: u32,
     raw: bool,
+    delta: bool,
 }
 
-const READ_USAGE: &str = "usage: helm shell read <target> [-n LINES] [--raw]";
+const READ_USAGE: &str = "usage: helm shell read <target> [-n LINES] [--raw | --delta]";
 
 fn parse_read_args(args: &[String]) -> Result<ReadArgs, String> {
     let mut target: Option<&str> = None;
     let mut lines = tmux::DEFAULT_CAPTURE_LINES;
     let mut raw = false;
+    let mut delta = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -443,6 +449,10 @@ fn parse_read_args(args: &[String]) -> Result<ReadArgs, String> {
                 raw = true;
                 i += 1;
             }
+            "--delta" => {
+                delta = true;
+                i += 1;
+            }
             other => {
                 if target.is_some() {
                     return Err(READ_USAGE.to_string());
@@ -453,15 +463,26 @@ fn parse_read_args(args: &[String]) -> Result<ReadArgs, String> {
         }
     }
     let target = target.ok_or_else(|| READ_USAGE.to_string())?;
+    if delta && raw {
+        // --raw keeps the pane's trailing blank padding, which the delta
+        // cursor math strips by design; the combination is contradictory.
+        return Err("helm shell read: --delta and --raw are mutually exclusive".to_string());
+    }
     Ok(ReadArgs {
         target: target.to_string(),
         lines,
         raw,
+        delta,
     })
 }
 
 fn shell_read(args: &[String]) -> std::process::ExitCode {
-    let ReadArgs { target, lines, raw } = match parse_read_args(args) {
+    let ReadArgs {
+        target,
+        lines,
+        raw,
+        delta,
+    } = match parse_read_args(args) {
         Ok(p) => p,
         Err(msg) => {
             eprintln!("{msg}");
@@ -484,6 +505,42 @@ fn shell_read(args: &[String]) -> std::process::ExitCode {
         );
         eprintln!("helm: {e}");
         return std::process::ExitCode::FAILURE;
+    }
+    if delta {
+        let (_, session) = tmux::parse_target(&target);
+        let key = readcursor::key_shell(&alias, &session);
+        let logged = format!("-n {lines} --delta");
+        return match readcursor::delta_read(&alias, &session, &key, lines) {
+            Ok(res) => {
+                if let Some(note) = res.note(lines) {
+                    eprintln!("helm: {note}");
+                }
+                if !res.stdout().is_empty() {
+                    println!("{}", res.stdout());
+                }
+                log_action(
+                    activity::ActivityKind::ShellRead,
+                    &alias,
+                    &session_label,
+                    &logged,
+                    &activity::preview(res.stdout()),
+                    Some(0),
+                );
+                std::process::ExitCode::SUCCESS
+            }
+            Err(e) => {
+                log_action(
+                    activity::ActivityKind::ShellRead,
+                    &alias,
+                    &session_label,
+                    &logged,
+                    "",
+                    Some(1),
+                );
+                eprintln!("helm: {e}");
+                std::process::ExitCode::FAILURE
+            }
+        };
     }
     match tmux::capture(&target, lines) {
         Ok(s) => {
@@ -674,6 +731,17 @@ mod tests {
         assert_eq!(r.target, "web");
         assert_eq!(r.lines, tmux::DEFAULT_CAPTURE_LINES);
         assert!(!r.raw);
+        assert!(!r.delta);
+    }
+
+    #[test]
+    fn read_args_delta_flag_and_raw_conflict() {
+        let r = parse_read_args(&v(&["web", "--delta"])).unwrap();
+        assert!(r.delta);
+        let r = parse_read_args(&v(&["web", "--delta", "-n", "50"])).unwrap();
+        assert!(r.delta);
+        assert_eq!(r.lines, 50);
+        assert!(parse_read_args(&v(&["web", "--delta", "--raw"])).is_err());
     }
 
     #[test]

@@ -71,6 +71,7 @@ helm shell run  <target> "<cmd>"        # run one command, get back its output +
 helm shell send <target> "<text>"       # type a line (auto-Enter)
 helm shell key  <target> <key...>       # send raw key specs (Up, C-c, Escape) — drive a TUI
 helm shell read <target> [-n LINES]     # scrape scrollback (default 200; trailing blanks stripped, --raw keeps them)
+helm shell read <target> --delta        # only lines NEW since my last --delta read (-n caps them) — the polling read
 helm shell close <target>               # kill the session
 ```
 
@@ -83,6 +84,7 @@ helm pane send  [-l LABEL] "<text>"               # type a line (auto-Enter)
 helm pane run   [-l LABEL] "<cmd>"                # run one command, get back its output + exit: N
 helm pane key   [-l LABEL] <key...>               # raw key specs (no Enter) — drive a local TUI
 helm pane read  [-l LABEL] [-n N] [--raw]         # capture (default 200, trailing blanks stripped)
+helm pane read  [-l LABEL] --delta                # only lines NEW since my last --delta read
 helm pane close [-l LABEL]                         # kill the drivable pane
 helm pane reconcile                                # clear an orphaned ⚓ anchor (no pane left)
 helm pane list                                     # list helm panes in this window
@@ -145,6 +147,8 @@ SSH_AUTH_SOCK=/tmp/<user>-ssh-agent.sock helm shell read web -n 10   # confirm
 ```
 
 `send`'s exit code only confirms the keystrokes reached tmux, never that the remote command succeeded. (`run` is the exception — its `exit: N` *is* the remote command's status.)
+
+**Polling? Use `read --delta`.** Any second-and-later read of the same session/pane — confirming a `send`, watching a long command, tailing a log pane — should be `read <target> --delta`: it returns only lines that appeared since my previous `--delta` read, so old scrollback never re-enters my context. First delta (or after `clear`/a TUI redraw, which lose the cursor) falls back to a full read and reseeds — it says so on stderr. `-n` caps a huge delta (skipped lines are reported and stay skipped). Plain `read` remains for the *first* look at an unknown pane state and for TUIs; `--delta` doesn't re-show lines that were rewritten in place (progress bars).
 
 ---
 
@@ -324,7 +328,7 @@ Refer to `helm shell help` and `helm pane help` on the operator's machine for th
 | `run <target> "<cmd>" [--timeout S]` | run one non-interactive command; print its output + `exit: N` (single ssh round-trip) |
 | `send <target> "<text>"` | type a line (auto-Enter) into the active pane |
 | `key <target> <key...>` | send raw tmux key specs (no Enter) — drive a TUI |
-| `read <target> [-n LINES] [--raw]` | capture scrollback (default 200; trailing blanks stripped unless `--raw`) |
+| `read <target> [-n LINES] [--raw \| --delta]` | capture scrollback (default 200; trailing blanks stripped unless `--raw`); `--delta` = only lines new since the last delta read |
 | `list <alias>` | list helm-* sessions on the alias's server (`local` for the operator's machine) |
 | `close <target>` | kill the session |
 
@@ -335,7 +339,7 @@ Refer to `helm shell help` and `helm pane help` on the operator's machine for th
 | `send [-l LABEL] "<text>"` | type a line (auto-Enter) |
 | `run [-l LABEL] "<cmd>" [--timeout S]` | run one non-interactive command; print its output + `exit: N` |
 | `key [-l LABEL] <key...>` | send raw key specs (no Enter) |
-| `read [-l LABEL] [-n N] [--raw]` | capture the pane (default 200, trailing blanks stripped) |
+| `read [-l LABEL] [-n N] [--raw \| --delta]` | capture the pane (default 200, trailing blanks stripped); `--delta` = only new lines |
 | `close [-l LABEL]` | kill the drivable pane (markers torn down when none remain) |
 | `list` | list helm panes in this window |
 
