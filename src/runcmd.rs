@@ -122,34 +122,53 @@ fn run_tag() -> String {
     format!("__helm_{pid}_{seq}")
 }
 
+/// The line typed into the shell for a `run`: a start marker (`<tag>:s:`,
+/// printed the moment the shell executes the line — the unambiguous "output
+/// begins here" row, robust against the echoed input wrapping across pane
+/// rows, which the old echo-line heuristic was not), the command, the exit
+/// sentinel, then a `wait-for` signal on the per-call channel (plain `tmux`
+/// — inside the pane `$TMUX` routes it to the right server).
+fn run_payload(cmd: &str, tag: &str) -> String {
+    format!("printf '{tag}:s:\\n'; {cmd}; printf '\\n{tag}:%d:\\n' \"$?\"; tmux wait-for -S {tag}")
+}
+
 /// Stateful one-shot: ensure the session, type `cmd` followed by a sentinel
-/// `printf`, then poll for the sentinel — *all in a single remote `sh`
-/// invocation*, so the poll loop runs on the host rather than as repeated ssh
-/// round-trips. Returns the command's output and exit code. `cmd` must be a
-/// single line (callers reject embedded newlines, which would detach the
-/// sentinel from the command). Non-interactive commands only; a pane sitting
-/// in a pager/editor is reported as `busy`.
+/// `printf` and a `tmux wait-for -S` signal, then block on `tmux wait-for` —
+/// *all in a single remote `sh` invocation*, so the wait happens on the host
+/// rather than as repeated ssh round-trips. Completion is EVENT-driven: the
+/// payload signals a per-call channel the runner is waiting on, waking it the
+/// instant the command finishes (signals latch, so a command that finishes
+/// before the runner reaches `wait-for` still wakes it — verified on tmux
+/// 3.6b). A background watchdog (0.5s period) backstops the three cases the
+/// event can't cover: shell death mid-command, timeout, and a pane whose
+/// shell can't reach `tmux` (sentinel grep catches those). Returns the
+/// command's output and exit code. `cmd` must be a single line (callers
+/// reject embedded newlines, which would detach the sentinel from the
+/// command). Non-interactive commands only; a pane sitting in a pager/editor
+/// is reported as `busy`.
 pub fn run_command(target: &str, cmd: &str, timeout_secs: u32) -> Result<RunOutcome> {
     let (alias, session) = parse_target(target);
     let q_session = shell_quote(&session);
     let tmux = tmux_prefix();
     let tag = run_tag();
-    // The line typed into the shell: the command, then a printf emitting
-    // `<tag>:<exit>:` on its own line. `;` so the printf always runs and `$?`
-    // reflects the command's own exit. The leading `\n` guarantees the
-    // sentinel starts a fresh line even if the command's output lacks a
-    // trailing newline.
-    let payload = format!("{cmd}; printf '\\n{tag}:%d:\\n' \"$?\"");
+    // See `run_payload`: start marker + command + exit sentinel + wait-for
+    // signal. `;` chains so the sentinel printf always runs and `$?` reflects
+    // the command's own exit; the printf runs BEFORE the signal, so the
+    // sentinel is always captured once the runner wakes. The sentinel's
+    // leading `\n` guarantees it starts a fresh line even if the command's
+    // output lacks a trailing newline.
+    let payload = run_payload(cmd, &tag);
     let q_payload = shell_quote(&payload);
     // Match the *result* sentinel (`<tag>:` then a digit), never the echoed
-    // printf format (`<tag>:%d`), so the poll can't exit early on the input
-    // echo line.
+    // printf format (`<tag>:%d`), so the backstop can't exit early on the
+    // input echo line.
     let q_grep = shell_quote(&format!("{tag}:[0-9]"));
     let q_busy = shell_quote(&format!("{tag}:busy:"));
     let q_gone = shell_quote(&format!("{tag}:gone:"));
-    let iters = timeout_secs.max(1) * 5; // 0.2s poll period
+    let q_chan = shell_quote(&tag);
+    let iters = timeout_secs.max(1) * 2; // 0.5s watchdog period
     let script = build_run_script(
-        &tmux, &q_session, &q_payload, &q_grep, &q_busy, &q_gone, iters,
+        &tmux, &q_session, &q_payload, &q_grep, &q_busy, &q_gone, &q_chan, iters,
     );
     let out = runner_cmd(&alias, &script)
         .output()
@@ -166,10 +185,12 @@ pub fn run_command(target: &str, cmd: &str, timeout_secs: u32) -> Result<RunOutc
 }
 
 /// Assemble the single remote `sh` script `run_command` ships: ensure the
-/// session, busy-guard at a prompt, send the payload, poll for the sentinel
-/// (host-side, so one ssh round-trip), and emit the final capture. Split out as
-/// a pure builder so the script's shape is unit-tested without a tmux server.
-/// All `q_*` args are already shell-quoted by the caller.
+/// session, busy-guard at a prompt, send the payload, then block on
+/// `wait-for` (event-driven; a 0.5s watchdog backstops death/timeout/
+/// unsignalable panes and wakes the waiter via the same channel), and emit
+/// the final capture. Split out as a pure builder so the script's shape is
+/// unit-tested without a tmux server. All `q_*` args are already
+/// shell-quoted by the caller.
 #[allow(clippy::too_many_arguments)]
 fn build_run_script(
     tmux: &str,
@@ -178,6 +199,7 @@ fn build_run_script(
     q_grep: &str,
     q_busy: &str,
     q_gone: &str,
+    q_chan: &str,
     iters: u32,
 ) -> String {
     format!(
@@ -188,11 +210,13 @@ fn build_run_script(
          case \"$__c\" in {IDLE_SHELLS}) ;; *) printf '%s\\n' {q_busy}; exit 0 ;; esac; \
          {tmux} send-keys -t {q_session} -l -- {q_payload}; \
          {tmux} send-keys -t {q_session} Enter; \
-         __i=0; while [ $__i -lt {iters} ]; do \
-           {tmux} has-session -t {q_session} 2>/dev/null || break; \
-           {tmux} capture-pane -t {q_session} -p -S -500 | grep -E -q -e {q_grep} && break; \
-           sleep 0.2; __i=$(( __i + 1 )); \
-         done; \
+         ( __i=0; while [ $__i -lt {iters} ]; do \
+             {tmux} has-session -t {q_session} 2>/dev/null || break; \
+             {tmux} capture-pane -t {q_session} -p -S -500 | grep -E -q -e {q_grep} && break; \
+             sleep 0.5; __i=$(( __i + 1 )); \
+           done; {tmux} wait-for -S {q_chan} ) >/dev/null 2>&1 & __w=$!; \
+         {tmux} wait-for {q_chan}; \
+         kill $__w 2>/dev/null; \
          {tmux} has-session -t {q_session} 2>/dev/null || {{ printf '%s\\n' {q_gone}; exit 0; }}; \
          {tmux} capture-pane -t {q_session} -p -S -500"
     )
@@ -202,7 +226,8 @@ fn build_run_script(
 /// (`%N`) on the operator's own server — no ssh, no session create (the caller
 /// resolved the pane). Guards on `#{pane_current_command}`, and uses
 /// `#{pane_dead}` (not `has-session`) for death detection, since a pane whose
-/// shell exits under `remain-on-exit` lingers as a dead pane.
+/// shell exits under `remain-on-exit` lingers as a dead pane. Same
+/// event-driven wait-for + watchdog structure as `build_run_script`.
 #[allow(clippy::too_many_arguments)]
 fn build_pane_run_script(
     tmux: &str,
@@ -211,6 +236,7 @@ fn build_pane_run_script(
     q_grep: &str,
     q_busy: &str,
     q_gone: &str,
+    q_chan: &str,
     iters: u32,
 ) -> String {
     format!(
@@ -221,12 +247,14 @@ fn build_pane_run_script(
          case \"$__c\" in {IDLE_SHELLS}) ;; *) printf '%s\\n' {q_busy}; exit 0 ;; esac; \
          {tmux} send-keys -t {q_pane} -l -- {q_payload}; \
          {tmux} send-keys -t {q_pane} Enter; \
-         __i=0; while [ $__i -lt {iters} ]; do \
-           __d=$({tmux} display-message -p -t {q_pane} '#{{pane_dead}}' 2>/dev/null) || break; \
-           [ \"$__d\" = 1 ] && break; \
-           {tmux} capture-pane -t {q_pane} -p -S -500 | grep -E -q -e {q_grep} && break; \
-           sleep 0.2; __i=$(( __i + 1 )); \
-         done; \
+         ( __i=0; while [ $__i -lt {iters} ]; do \
+             __d=$({tmux} display-message -p -t {q_pane} '#{{pane_dead}}' 2>/dev/null) || break; \
+             [ \"$__d\" = 1 ] && break; \
+             {tmux} capture-pane -t {q_pane} -p -S -500 | grep -E -q -e {q_grep} && break; \
+             sleep 0.5; __i=$(( __i + 1 )); \
+           done; {tmux} wait-for -S {q_chan} ) >/dev/null 2>&1 & __w=$!; \
+         {tmux} wait-for {q_chan}; \
+         kill $__w 2>/dev/null; \
          __d=$({tmux} display-message -p -t {q_pane} '#{{pane_dead}}' 2>/dev/null); \
          case \"$__d\" in 1|'') printf '%s\\n' {q_gone}; exit 0 ;; esac; \
          {tmux} capture-pane -t {q_pane} -p -S -500"
@@ -327,20 +355,22 @@ pub fn wait_pane(pane_id: &str, timeout_secs: u32) -> Result<WaitOutcome> {
 
 /// Run `cmd` in an already-resolved window pane (`pane_id`, e.g. `%3`) on the
 /// local tmux server, returning its output and exit code. The `helm pane run`
-/// engine — same sentinel scheme as `run_command`, but pane-targeted and
-/// ssh-free.
+/// engine — same sentinel + wait-for scheme as `run_command`, but
+/// pane-targeted and ssh-free.
 pub fn run_in_pane(pane_id: &str, cmd: &str, timeout_secs: u32) -> Result<RunOutcome> {
     let q_pane = shell_quote(pane_id);
     let tmux = tmux_prefix();
     let tag = run_tag();
-    let payload = format!("{cmd}; printf '\\n{tag}:%d:\\n' \"$?\"");
+    let payload = run_payload(cmd, &tag);
     let q_payload = shell_quote(&payload);
     let q_grep = shell_quote(&format!("{tag}:[0-9]"));
     let q_busy = shell_quote(&format!("{tag}:busy:"));
     let q_gone = shell_quote(&format!("{tag}:gone:"));
-    let iters = timeout_secs.max(1) * 5;
-    let script =
-        build_pane_run_script(&tmux, &q_pane, &q_payload, &q_grep, &q_busy, &q_gone, iters);
+    let q_chan = shell_quote(&tag);
+    let iters = timeout_secs.max(1) * 2; // 0.5s watchdog period
+    let script = build_pane_run_script(
+        &tmux, &q_pane, &q_payload, &q_grep, &q_busy, &q_gone, &q_chan, iters,
+    );
     let out = runner_cmd(LOCAL_ALIAS, &script)
         .output()
         .context("spawn pane run runner")?;
@@ -377,14 +407,24 @@ pub fn extract_run(captured: &str, tag: &str) -> RunOutcome {
         };
     }
     let lines: Vec<&str> = captured.lines().collect();
+    // Output begins after the start-marker row the wrapper printf'd — the
+    // LAST exact `<tag>:s:` line (rposition skips any forged copy a wrapped
+    // input echo might leave). Fall back to the echoed printf format for
+    // captures without a marker (shell died before the wrapper ran).
+    let start_marker = format!("{tag}:s:");
     let echo_needle = format!("{tag}:%d"); // the typed printf format
+    let start_after = |region: &[&str]| -> usize {
+        region
+            .iter()
+            .rposition(|l| l.trim_end() == start_marker)
+            .or_else(|| region.iter().rposition(|l| l.contains(&echo_needle)))
+            .map(|i| i + 1)
+            .unwrap_or(0)
+    };
     match lines.iter().rposition(|l| sentinel_exit(l, tag).is_some()) {
         Some(s_idx) => {
             let exit = sentinel_exit(lines[s_idx], tag);
-            let echo_idx = lines[..s_idx]
-                .iter()
-                .rposition(|l| l.contains(&echo_needle));
-            let start = echo_idx.map(|i| i + 1).unwrap_or(0);
+            let start = start_after(&lines[..s_idx]);
             RunOutcome {
                 output: strip_trailing_blank(&lines[start..s_idx].join("\n")),
                 exit,
@@ -393,10 +433,9 @@ pub fn extract_run(captured: &str, tag: &str) -> RunOutcome {
             }
         }
         None => {
-            // No sentinel — command still running at timeout. Best-effort:
-            // everything after the echoed input line.
-            let echo_idx = lines.iter().rposition(|l| l.contains(&echo_needle));
-            let start = echo_idx.map(|i| i + 1).unwrap_or(0);
+            // No sentinel — command still running at timeout. Everything
+            // after the start marker (or the echoed input line).
+            let start = start_after(&lines);
             RunOutcome {
                 output: strip_trailing_blank(&lines[start..].join("\n")),
                 exit: None,
@@ -498,7 +537,8 @@ mod tests {
             "'t:[0-9]'",
             "'t:busy:'",
             "'t:gone:'",
-            150,
+            "'t'",
+            60,
         );
         assert!(s.contains("has-session -t helm"));
         assert!(s.contains("new-session -d -x 200 -y 50 -s helm"));
@@ -507,10 +547,17 @@ mod tests {
         // Busy-guard keys off the foreground command, not the prompt string.
         assert!(s.contains("display-message -p -t helm '#{pane_current_command}'"));
         assert!(s.contains("sh|bash|zsh|ksh|oksh"));
+        // Event-driven wait: foreground blocks on the per-call channel; the
+        // backstop watchdog greps for the sentinel and signals the same
+        // channel on death/timeout.
+        assert!(s.contains("tmux -u wait-for 't'"));
+        assert!(s.contains("wait-for -S 't'"));
+        assert!(s.contains("kill $__w"));
         assert!(s.contains("grep -E -q -e 't:[0-9]'"));
         assert!(s.contains("printf '%s\\n' 't:busy:'"));
         assert!(s.contains("printf '%s\\n' 't:gone:'"));
-        assert!(s.contains("[ $__i -lt 150 ]"));
+        assert!(s.contains("[ $__i -lt 60 ]"));
+        assert!(s.contains("sleep 0.5"));
         assert!(s.contains("capture-pane -t helm -p -S -500"));
     }
 
@@ -523,7 +570,8 @@ mod tests {
             "'t:[0-9]'",
             "'t:busy:'",
             "'t:gone:'",
-            50,
+            "'t'",
+            20,
         );
         // Targets the pane id, not a session, and never creates one.
         assert!(s.contains("send-keys -t %3 -l -- 'payload'"));
@@ -533,6 +581,10 @@ mod tests {
         assert!(s.contains("#{pane_dead}:#{pane_current_command}"));
         assert!(s.contains("sh|bash|zsh|ksh|oksh"));
         assert!(s.contains("#{pane_dead}"));
+        // Same event-driven wait + watchdog as the session script.
+        assert!(s.contains("tmux wait-for 't'"));
+        assert!(s.contains("wait-for -S 't'"));
+        assert!(s.contains("[ $__i -lt 20 ]"));
         assert!(s.contains("printf '%s\\n' 't:gone:'"));
     }
 
@@ -632,6 +684,30 @@ mod tests {
         );
         assert!(parse_wait("").is_err());
         assert!(parse_wait("garbage\n").is_err());
+    }
+
+    #[test]
+    fn extract_run_starts_at_the_start_marker() {
+        // The modern wrapper prints `<tag>:s:` when the line executes; output
+        // is everything between it and the exit sentinel, so a wrapped input
+        // echo (which splits across pane rows and defeats the echo-needle
+        // heuristic) can't leak into the output.
+        let tag = "__helm_1_0";
+        let cap = "$ printf '__helm_1_0:s:\\n'; echo hi; printf '\\n__helm_1_0:%d:\\n' \"$?\"; tmux wa\n\
+                   it-for -S __helm_1_0\n\
+                   __helm_1_0:s:\nhi\n\n__helm_1_0:0:\n$\n";
+        let out = extract_run(cap, tag);
+        assert_eq!(out.output, "hi");
+        assert_eq!(out.exit, Some(0));
+    }
+
+    #[test]
+    fn extract_run_timeout_starts_at_the_start_marker() {
+        let tag = "__helm_1_0";
+        let cap = "$ echo-echo __helm_1_0:%d: fragment\n__helm_1_0:s:\nstill working\n";
+        let out = extract_run(cap, tag);
+        assert_eq!(out.exit, None);
+        assert_eq!(out.output, "still working");
     }
 
     #[test]

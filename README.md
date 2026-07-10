@@ -25,7 +25,7 @@ Three rules every interaction obeys. The agent never breaks them, the human does
 2. **Narrate intent before sending.** Two sentences max, in chat, before any keystrokes land. The human has time to interrupt before anything visible happens in the shell.
 3. **Refuse to type passwords.** When `read` shows a `password:` or `passphrase:` line, the agent stops and tells the operator. The human answers in their own attached tmux pane.
 
-Hand the agent the skill at [`.claude/skills/helm-shell/SKILL.md`](.claude/skills/helm-shell/SKILL.md). It encodes the three rules above plus the read-then-send loop, label conventions for parallel work, and a `ssh-agent` socket bridge pattern.
+Hand the agent the skill at [`.claude/skills/helm/SKILL.md`](.claude/skills/helm/SKILL.md). It encodes the three rules above plus the read-then-send loop, label conventions for parallel work, and a `ssh-agent` socket bridge pattern.
 
 ## Quickstart
 

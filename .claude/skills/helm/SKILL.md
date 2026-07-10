@@ -1,9 +1,9 @@
 ---
-name: helm-shell
+name: helm
 description: "Drive a persistent shell the operator and I both watch live — a helm tmux session on a remote ssh alias (web, vps1, relay, …), or a pane in the operator's current tmux window. Local shell work defaults to an in-window pane (the operator lives in tmux); 'local' is the escape hatch for a session that must outlive the window. Remote work auto-opens a read-only viewport pane so the operator sees every keystroke (opt out with 'headless' / 'in the background'); sessions survive disconnects. Everything routes through the helm CLI: remote sessions via 'helm shell' (open/run/send/key/read/list/close), in-window panes via 'helm pane' (open/view/send/key/read/close/list) — I never drive raw tmux. For a non-interactive command whose result I just need, prefer 'helm shell run <target> <cmd>' (or 'helm pane run' in a pane): one call returns the command's output plus its exit code, no read-then-send loop. 'helm shell key' / 'helm pane key' send raw key specs (Up, C-c, Escape) to drive a full-screen TUI — including on a remote host over ssh. Read-then-send keeps the operator in the loop for interactive or risky work — they can intervene any moment (type a password, Ctrl-C) because it's their tmux. CONSIDER IT PROACTIVELY, not only on explicit request: together with one-shot 'helm exec' it is one of the only two ways I can run anything on another machine, so route remote work here rather than assuming I cannot help. To just check machine state — is a service up, a cert near expiry, what's listening — prefer the read verbs ('helm svc/health/ports/show'). Pure in-repo code work needs no helm; when a task shifts from inside a project to operating the machine itself, propose helm and confirm before driving. Reach for it automatically when — the task operates a machine rather than a project's code — a remote server/VPS, or this local box itself (system, service, or network configuration) — and is interactive, multi-step, or stateful (deploy, restart a service, tail logs, configure networking, run a migration, debug on the box); a command needs interactive doas/sudo or an ssh passphrase the operator must type; the operator should watch and be able to interrupt; shell state matters (cwd/env/history persist) or a helm shell is already open; or something long-lived/visible should sit in a pane — a dev server, build, or 'tail -f'. Explicit triggers still apply: 'send to helm', 'run in my helm shell', 'run it here', 'open/split a pane here', 'watch <host> in a pane', 'drive the TUI'. SKIP a quick one-shot stateless command whose output I just need — that's 'helm exec <alias> <cmd>' or direct ssh, simpler."
 ---
 
-# helm-shell
+# helm
 
 A bridge skill. The operator runs persistent shells — a tmux session on a remote host, or a pane in their own tmux window. They watch live by attaching; I drive from the side: read scrollback, type commands, never blind. The operator can intervene at any moment — passwords, Ctrl-C, anything — because it is their tmux.
 
@@ -30,7 +30,7 @@ Two sibling surfaces need no shell at all:
 
 ## the default: open the surface first, then keep going
 
-When the operator points me at a machine — names a host (`helm shell web`, `/helm-shell web`, "get me into web", "show me web", "watch web") or asks for a local shell — **opening the surface is my first action, automatic, every time.** Not a second step the operator has to ask for after I've already run something.
+When the operator points me at a machine — names a host (`helm shell web`, `/helm web`, "get me into web", "show me web", "watch web") or asks for a local shell — **opening the surface is my first action, automatic, every time.** Not a second step the operator has to ask for after I've already run something.
 
 - **Host named → open the viewport first.** `helm pane view <target>` *before* I run anything, so the operator watches from keystroke one; then I drive the session (`helm shell run/send/key`) and carry the task through. Running a remote command and *then* offering to open a pane is the two-step handoff this skill exists to kill — never do that.
 - **Local shell → the pane is the surface.** `helm pane open`/`send` splits it on first use, so it's there as I work. Same rule: don't run, then ask whether to open a pane.
@@ -106,7 +106,7 @@ SSH_AUTH_SOCK=/tmp/<user>-ssh-agent.sock helm shell run web "doas rcctl restart 
 # exit: 0
 ```
 
-One call sends the command, waits for it to finish (a single ssh round-trip — the wait happens on the host), and returns **only that command's output plus `exit: N`**. No read-then-send loop, no eyeballing "did it work" — the exit code is the answer. `run` is single-line, non-interactive only:
+One call sends the command, waits for it to finish (a single ssh round-trip — the wait happens on the host, **event-driven**: the wrapper signals a tmux channel the instant the command completes, so `run` returns the moment it's done, no polling granularity), and returns **only that command's output plus `exit: N`**. No read-then-send loop, no eyeballing "did it work" — the exit code is the answer. `run` is single-line, non-interactive only:
 
 - A pane sitting in a pager/editor, or mid-command, is reported `busy` → fall back to `read`/`send`, or `key` for a TUI.
 - A command that exits the shell (`exit`, `logout`) is reported as the session being gone.

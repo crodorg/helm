@@ -104,3 +104,11 @@ fn shell_wait_rejects_bad_args_before_touching_tmux() {
     let _ = shell_wait(&v(&["web", "--timeout", "0"]));
     let _ = shell_wait(&v(&["web:b@d"]));
 }
+
+#[test]
+fn shell_run_rejects_bad_args_before_touching_tmux() {
+    // Pure exit-2 paths: usage, multiline, bad label — no tmux spawn.
+    let _ = shell_run(&v(&[]));
+    let _ = shell_run(&["web".into(), "echo a\necho b".into()]);
+    let _ = shell_run(&v(&["web:b@d", "uptime"]));
+}

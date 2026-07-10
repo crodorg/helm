@@ -10,7 +10,7 @@
 //!
 //! Everything here is raw `tmux` against the operator's own server — no ssh.
 //! The pane markers, the window flag `@helm_here`, and the `pane-border-format`
-//! string are kept byte-for-byte identical to what the helm-shell skill has
+//! string are kept byte-for-byte identical to what the helm skill has
 //! always documented, because the operator's `~/.tmux.conf` (a
 //! `window-layout-changed` cleanup hook, a status-bar `@helm_here` fragment) is
 //! a contract keyed on those exact names. `close` kills the pane and then
@@ -40,7 +40,7 @@ fn log_pane(kind: ActivityKind, tag: &str, cmd: &str, exit: Option<i32>) {
     crate::log_action(kind, "pane", tag, cmd, "", exit);
 }
 
-/// The window border format. IDENTICAL to the helm-shell skill's AND the
+/// The window border format. IDENTICAL to the helm skill's AND the
 /// `pi-bg` extension's copy (which sets it so background panes render ⚙ even
 /// when no helm-managed pane exists) — the operator's tmux config renders
 /// `@helm_label`/`@helm_viewport`/`@helm_bg` with it, so it must not drift.
