@@ -68,6 +68,7 @@ All commands run via the Bash tool. Remote `helm shell` calls need the ssh-agent
 helm shell list <alias>                 # which helm-* sessions exist on the host (alias or `local`)
 helm shell open -d <target>             # create the session detached, no attach
 helm shell run  <target> "<cmd>"        # run one command, get back its output + `exit: N` (one call)
+helm shell wait <target> [--timeout S]  # block until the session is back at a shell prompt (default 60s)
 helm shell send <target> "<text>"       # type a line (auto-Enter)
 helm shell key  <target> <key...>       # send raw key specs (Up, C-c, Escape) — drive a TUI
 helm shell read <target> [-n LINES]     # scrape scrollback (default 200; trailing blanks stripped, --raw keeps them)
@@ -82,6 +83,7 @@ helm pane open  [-l LABEL] [--below] [--size N]   # resolve-or-create a drivable
 helm pane view  <target> [--below] [--size N]     # read-only viewport onto a remote helm session
 helm pane send  [-l LABEL] "<text>"               # type a line (auto-Enter)
 helm pane run   [-l LABEL] "<cmd>"                # run one command, get back its output + exit: N
+helm pane wait  [-l LABEL] [--timeout S]          # block until the pane is back at a shell prompt
 helm pane key   [-l LABEL] <key...>               # raw key specs (no Enter) — drive a local TUI
 helm pane read  [-l LABEL] [-n N] [--raw]         # capture (default 200, trailing blanks stripped)
 helm pane read  [-l LABEL] --delta                # only lines NEW since my last --delta read
@@ -138,15 +140,16 @@ Send one logical command at a time, then `read` again before the next. Latency i
 
 ## verifying success (send/read path)
 
-`send` returns instantly; it does not wait for the remote command to finish. After sending, sleep briefly (the Bash tool's natural latency is usually enough) and `read` again. For long-running commands, poll `read` until the next prompt.
+`send` returns instantly; it does not wait for the remote command to finish. After sending, **`wait` for completion — never sleep-poll `read`**: `helm shell wait <target>` blocks (host-side poll, one ssh round-trip, zero tokens while waiting) until the session's foreground command returns to a shell prompt, then exits 0. Exit 124 = still busy at `--timeout` (default 60s; wait again or peek), exit 1 = session gone.
 
 ```sh
 SSH_AUTH_SOCK=/tmp/<user>-ssh-agent.sock helm shell read web -n 30   # check state
 SSH_AUTH_SOCK=/tmp/<user>-ssh-agent.sock helm shell send web "doas rcctl restart httpd"
-SSH_AUTH_SOCK=/tmp/<user>-ssh-agent.sock helm shell read web -n 10   # confirm
+SSH_AUTH_SOCK=/tmp/<user>-ssh-agent.sock helm shell wait web        # block until back at a prompt
+SSH_AUTH_SOCK=/tmp/<user>-ssh-agent.sock helm shell read web --delta # only the new output
 ```
 
-`send`'s exit code only confirms the keystrokes reached tmux, never that the remote command succeeded. (`run` is the exception — its `exit: N` *is* the remote command's status.)
+`send`'s exit code only confirms the keystrokes reached tmux, never that the remote command succeeded — and `wait` reports "back at a prompt", never the command's exit code (nothing is wrapped; that's the trade that keeps interactive flows safe). Judge success from the `read --delta` output. (`run` is the exception — its `exit: N` *is* the remote command's status.) `send` → `wait` → `read --delta` is the standard pattern for anything `run` refuses: interactive prompts (doas, passphrases — wait keeps blocking while the operator types), multi-line input, or a pane that was mid-something. For expected-long waits, park the *whole* `helm shell wait` call in a background shell like a long `run` (below). `helm pane wait [-l LABEL]` is the local analogue.
 
 **Polling? Use `read --delta`.** Any second-and-later read of the same session/pane — confirming a `send`, watching a long command, tailing a log pane — should be `read <target> --delta`: it returns only lines that appeared since my previous `--delta` read, so old scrollback never re-enters my context. First delta (or after `clear`/a TUI redraw, which lose the cursor) falls back to a full read and reseeds — it says so on stderr. `-n` caps a huge delta (skipped lines are reported and stay skipped). Plain `read` remains for the *first* look at an unknown pane state and for TUIs; `--delta` doesn't re-show lines that were rewritten in place (progress bars).
 
@@ -184,7 +187,7 @@ Two inputs sharpen the prior (but never replace the read):
 
 After a `doas` `send`, three states (read to disambiguate): **persistence hit** (output or fresh prompt, no `password:` line) → ran, continue; **prompt sitting open** (last non-empty line matches `doas \(.*\) password:` / `[sudo] password for …:`, no prompt below) → stop, tell the operator to type it into the viewport pane where they're watching (a live attach), poll until it clears; **mid-execution** (neither, long command streaming) → poll again, don't assume password. Poll ~1s after send, again 2–3s later if ambiguous. Never announce a password prompt until I've actually seen one.
 
-**Pre-arm only when root is the whole job.** When a task is plainly root-heavy from the outset — a sequence that will all need doas (a deploy, a service reconfigure, a batch of `rcctl`/`pkg_add`) — pre-arm once, up front: with the viewport open, `send "doas true && echo armed"`, let the operator type the password into the viewport, and `read`-poll for `armed`. That opens the ~5-min window before the real work, so the rest runs clean — a plain `run` then returns `exit: N` with no prompt. For one-off or uncertain doas use, don't pre-arm: run the command and handle any prompt reactively (above) — pre-arming a task that turns out not to need root just nags the operator. (Probe without prompting: `doas -n true` exits 0 if the window is already armed, nonzero and silent if not.)
+**Pre-arm only when root is the whole job.** When a task is plainly root-heavy from the outset — a sequence that will all need doas (a deploy, a service reconfigure, a batch of `rcctl`/`pkg_add`) — pre-arm once, up front: with the viewport open, `send "doas true && echo armed"`, let the operator type the password into the viewport, then `wait` for the prompt to return and `read --delta` to confirm `armed` (wait keeps blocking while the operator types — doas holds the pane's foreground). That opens the ~5-min window before the real work, so the rest runs clean — a plain `run` then returns `exit: N` with no prompt. For one-off or uncertain doas use, don't pre-arm: run the command and handle any prompt reactively (above) — pre-arming a task that turns out not to need root just nags the operator. (Probe without prompting: `doas -n true` exits 0 if the window is already armed, nonzero and silent if not.)
 
 ---
 
@@ -326,6 +329,7 @@ Refer to `helm shell help` and `helm pane help` on the operator's machine for th
 | `open <target>` | operator-attaches a terminal (I run it only as a viewport command or the opt-in self-attach) |
 | `open -d <target>` | pre-create the session detached |
 | `run <target> "<cmd>" [--timeout S]` | run one non-interactive command; print its output + `exit: N` (single ssh round-trip) |
+| `wait <target> [--timeout S]` | block until the session is back at a shell prompt (exit 0 done / 124 still busy / 1 gone); no command exit code — pair with `send` + `read --delta` |
 | `send <target> "<text>"` | type a line (auto-Enter) into the active pane |
 | `key <target> <key...>` | send raw tmux key specs (no Enter) — drive a TUI |
 | `read <target> [-n LINES] [--raw \| --delta]` | capture scrollback (default 200; trailing blanks stripped unless `--raw`); `--delta` = only lines new since the last delta read |
@@ -338,6 +342,7 @@ Refer to `helm shell help` and `helm pane help` on the operator's machine for th
 | `view <target> [--below] [--size N]` | resolve-or-create a read-only viewport onto a remote session |
 | `send [-l LABEL] "<text>"` | type a line (auto-Enter) |
 | `run [-l LABEL] "<cmd>" [--timeout S]` | run one non-interactive command; print its output + `exit: N` |
+| `wait [-l LABEL] [--timeout S]` | block until the pane is back at a shell prompt (exit 0 / 124 / 1); resolve-only — never creates a pane |
 | `key [-l LABEL] <key...>` | send raw key specs (no Enter) |
 | `read [-l LABEL] [-n N] [--raw \| --delta]` | capture the pane (default 200, trailing blanks stripped); `--delta` = only new lines |
 | `close [-l LABEL]` | kill the drivable pane (markers torn down when none remain) |

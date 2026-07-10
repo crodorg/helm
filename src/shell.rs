@@ -37,6 +37,11 @@ usage:
    [--timeout SECS]                   `exit: N`; one ssh round-trip
                                       (default timeout 30s). Single-line,
                                       non-interactive commands only
+  helm shell wait <target>            block until the session is back at a
+   [--timeout SECS]                   shell prompt (default 60s). No exit
+                                      code (nothing wrapped) — for the
+                                      interactive flows `run` refuses; pair
+                                      with `send` + `read --delta`
   helm shell key <target> <key...>    send raw tmux key specs (no Enter):
                                       Up Down C-c Escape F1 … to drive a
                                       TUI (vim, htop, menus) on the host
@@ -86,6 +91,7 @@ pub(crate) fn run_cli(args: &[String]) -> std::process::ExitCode {
         "open" => shell_open(&args[1..]),
         "send" => shell_send(&args[1..]),
         "run" => shell_run(&args[1..]),
+        "wait" => shell_wait(&args[1..]),
         "key" => shell_key(&args[1..]),
         "read" => shell_read(&args[1..]),
         "list" => shell_list(&args[1..]),
@@ -362,6 +368,58 @@ fn shell_run(args: &[String]) -> std::process::ExitCode {
                 "",
                 Some(1),
             );
+            eprintln!("helm: {e}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+const WAIT_USAGE: &str = "usage: helm shell wait <target> [--timeout SECS]";
+
+fn shell_wait(args: &[String]) -> std::process::ExitCode {
+    let Some(target) = args.first() else {
+        eprintln!("{WAIT_USAGE}");
+        return std::process::ExitCode::from(2);
+    };
+    let timeout = match opts::parse_wait_timeout(&args[1..], runcmd::DEFAULT_WAIT_TIMEOUT_SECS) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("helm shell wait: {e}\n{WAIT_USAGE}");
+            return std::process::ExitCode::from(2);
+        }
+    };
+    if let Some(code) = reject_bad_label(target) {
+        return code;
+    }
+    let (alias, _) = tmux::parse_target(target);
+    let session_label = tmux_label_from_target(target);
+    let res = runcmd::wait_session(target, timeout);
+    let (logged, exit) = match &res {
+        Ok(o) => o.logged(),
+        Err(_) => ("", Some(1)),
+    };
+    log_action(
+        activity::ActivityKind::ShellWait,
+        &alias,
+        &session_label,
+        "",
+        logged,
+        exit,
+    );
+    match res {
+        Ok(o) => {
+            eprintln!(
+                "helm: {}",
+                o.report(
+                    &format!("session {target}"),
+                    timeout,
+                    &format!("helm shell read {target} --delta"),
+                    &format!("helm shell open -d {target}"),
+                )
+            );
+            std::process::ExitCode::from(o.exit_byte())
+        }
+        Err(e) => {
             eprintln!("helm: {e}");
             std::process::ExitCode::FAILURE
         }
@@ -669,97 +727,5 @@ fn tmux_label_from_target(target: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn v(parts: &[&str]) -> Vec<String> {
-        parts.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn run_args_basic_joins_command_words() {
-        let r = parse_run_args(&v(&["web", "echo", "hi"])).unwrap();
-        assert_eq!(r.target, "web");
-        assert_eq!(r.cmd, "echo hi");
-        assert_eq!(r.timeout, runcmd::DEFAULT_RUN_TIMEOUT_SECS);
-    }
-
-    #[test]
-    fn run_args_timeout_anywhere_after_target() {
-        let r = parse_run_args(&v(&["web", "uptime", "--timeout", "5"])).unwrap();
-        assert_eq!(r.cmd, "uptime");
-        assert_eq!(r.timeout, 5);
-    }
-
-    #[test]
-    fn run_args_label_target_is_preserved() {
-        let r = parse_run_args(&v(&["saas:deploy", "make", "deploy"])).unwrap();
-        assert_eq!(r.target, "saas:deploy");
-        assert_eq!(r.cmd, "make deploy");
-    }
-
-    #[test]
-    fn run_args_rejects_missing_target_and_empty_command() {
-        assert!(parse_run_args(&v(&[])).is_err());
-        assert!(parse_run_args(&v(&["web"])).is_err());
-    }
-
-    #[test]
-    fn run_args_rejects_bad_timeout() {
-        assert!(parse_run_args(&v(&["web", "--timeout", "x", "uptime"])).is_err());
-        assert!(parse_run_args(&v(&["web", "--timeout", "0", "uptime"])).is_err());
-        assert!(parse_run_args(&v(&["web", "uptime", "--timeout"])).is_err());
-    }
-
-    #[test]
-    fn run_args_rejects_newline_command() {
-        // A real argv can carry an embedded newline (e.g. a heredoc paste).
-        let r = parse_run_args(&["web".to_string(), "echo a\necho b".to_string()]);
-        assert!(r.is_err());
-    }
-
-    #[test]
-    fn label_from_target_extracts_after_colon() {
-        assert_eq!(tmux_label_from_target("web"), "");
-        assert_eq!(tmux_label_from_target("web:deploy"), "deploy");
-        assert_eq!(tmux_label_from_target("local:claude"), "claude");
-    }
-
-    #[test]
-    fn read_args_defaults() {
-        let r = parse_read_args(&v(&["web"])).unwrap();
-        assert_eq!(r.target, "web");
-        assert_eq!(r.lines, tmux::DEFAULT_CAPTURE_LINES);
-        assert!(!r.raw);
-        assert!(!r.delta);
-    }
-
-    #[test]
-    fn read_args_delta_flag_and_raw_conflict() {
-        let r = parse_read_args(&v(&["web", "--delta"])).unwrap();
-        assert!(r.delta);
-        let r = parse_read_args(&v(&["web", "--delta", "-n", "50"])).unwrap();
-        assert!(r.delta);
-        assert_eq!(r.lines, 50);
-        assert!(parse_read_args(&v(&["web", "--delta", "--raw"])).is_err());
-    }
-
-    #[test]
-    fn read_args_flags() {
-        let r = parse_read_args(&v(&["web", "-n", "50", "--raw"])).unwrap();
-        assert_eq!(r.lines, 50);
-        assert!(r.raw);
-    }
-
-    #[test]
-    fn read_args_rejects_bad_and_missing() {
-        assert!(parse_read_args(&v(&["web", "-n", "x"])).is_err());
-        assert!(parse_read_args(&v(&["web", "-n"])).is_err());
-        // -n 0 is rejected: `-S -0` is the whole pane, not zero lines, and the
-        // message promises a positive integer.
-        assert!(parse_read_args(&v(&["web", "-n", "0"])).is_err());
-        assert!(parse_read_args(&v(&[])).is_err());
-        // A second positional is ambiguous.
-        assert!(parse_read_args(&v(&["web", "extra"])).is_err());
-    }
-}
+#[path = "shell_tests.rs"]
+mod tests;

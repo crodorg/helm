@@ -49,6 +49,19 @@ pub fn single_line_command(parts: &[String]) -> Result<String, CommandError> {
     Ok(cmd)
 }
 
+/// Parse the `[--timeout SECS]`-only argument tail of a `wait` invocation
+/// (both `helm shell wait` and `helm pane wait` take no other flags). Empty
+/// tail → the caller's default. `Err` is the bare reason; callers prepend
+/// their command prefix / usage line.
+pub fn parse_wait_timeout(args: &[String], default_secs: u32) -> Result<u32, &'static str> {
+    match args {
+        [] => Ok(default_secs),
+        [flag, val] if flag.as_str() == "--timeout" => parse_timeout(val),
+        [flag] if flag.as_str() == "--timeout" => Err("--timeout requires a value (seconds)"),
+        _ => Err("unexpected arguments"),
+    }
+}
+
 /// The process exit byte a `run` returns: the remote command's own exit for a
 /// completed run (clamped to the 0..=255 a process code occupies), 1 for a busy
 /// or gone session/pane, 124 (the GNU `timeout` convention) for a timeout. Both
@@ -100,6 +113,17 @@ mod tests {
             single_line_command(&["a\nb".into()]),
             Err(CommandError::MultiLine)
         );
+    }
+
+    #[test]
+    fn parse_wait_timeout_takes_only_the_flag() {
+        let v = |parts: &[&str]| -> Vec<String> { parts.iter().map(|s| s.to_string()).collect() };
+        assert_eq!(parse_wait_timeout(&v(&[]), 60), Ok(60));
+        assert_eq!(parse_wait_timeout(&v(&["--timeout", "5"]), 60), Ok(5));
+        assert!(parse_wait_timeout(&v(&["--timeout"]), 60).is_err());
+        assert!(parse_wait_timeout(&v(&["--timeout", "0"]), 60).is_err());
+        assert!(parse_wait_timeout(&v(&["extra"]), 60).is_err());
+        assert!(parse_wait_timeout(&v(&["--timeout", "5", "extra"]), 60).is_err());
     }
 
     #[test]

@@ -48,6 +48,7 @@ Open a shared tmux session against any host (or your own machine via the reserve
 helm shell open web              # attach (creates if missing)
 helm shell open -d web:deploy    # ensure exists, stay detached
 helm shell run  web 'uptime'     # run one command, get its output + exit code
+helm shell wait web              # block until the session is back at a shell prompt
 helm shell read web              # capture current pane scrollback
 helm shell send web 'cd /srv'    # type a line + Enter; shell state persists
 helm shell key  web C-c          # send a raw key (no Enter) — drive a TUI
@@ -61,6 +62,7 @@ When the work is **local and you're already in tmux**, `helm pane` splits a pane
 ```sh
 helm pane open                   # split a drivable shell pane here
 helm pane run 'cargo test'       # run one command, get output + exit code
+helm pane wait                   # block until the pane is back at a shell prompt
 helm pane view web               # read-only viewport onto a remote session
 helm pane key C-c                # raw keys into the local pane
 ```
@@ -74,13 +76,14 @@ Two surfaces, the same verbs. **`helm shell`** drives a tmux *session* on an ssh
 | `open <target>` | Attach this terminal to the session. Creates if missing. |
 | `open -d <target>` | Same, but stays detached — pre-create a session you intend to drive. |
 | `run <target> <cmd>` | Run one non-interactive command; print its output + `exit: N` in a single ssh round-trip. Refuses if the pane is busy. |
+| `wait <target> [--timeout S]` | Block until the session is back at a shell prompt (exit 0 done / 124 still busy / 1 gone) — the poll runs host-side in the same single round-trip. The sentinel-free companion to `run` for interactive flows (password prompts, multi-line input): `send`, `wait`, then `read --delta`. |
 | `send <target> <text>` | Type the line + Enter. Lands in the pane the human is attached to. |
 | `key <target> <key…>` | Send raw tmux key specs (`Up`, `C-c`, `Escape`) with no Enter — drive a full-screen TUI, including over ssh. |
-| `read <target> [-n N]` | Capture scrollback from the active pane (trailing blanks trimmed; `--raw` keeps them). Called *before every interactive send*. |
+| `read <target> [-n N]` | Capture scrollback from the active pane (trailing blanks trimmed; `--raw` keeps them). Called *before every interactive send*. `--delta` returns only lines new since the previous `--delta` read — repeated checks never re-ingest old output. |
 | `list <alias>` | List `helm-*` sessions on that alias's tmux server. |
 | `close <target>` | Kill the session. |
 
-`helm pane` mirrors `open / run / send / key / read / list / close` for a pane in the current window, plus `view <target>` — a **read-only viewport** onto a remote `helm shell` session so the human watches the agent work live (the agent drives the remote through `helm shell` and never types into the viewport). It needs `$TMUX_PANE` (helm must be running inside the operator's tmux); local shell work with no host named defaults here.
+`helm pane` mirrors `open / run / wait / send / key / read / list / close` for a pane in the current window, plus `view <target>` — a **read-only viewport** onto a remote `helm shell` session so the human watches the agent work live (the agent drives the remote through `helm shell` and never types into the viewport). It needs `$TMUX_PANE` (helm must be running inside the operator's tmux); local shell work with no host named defaults here.
 
 Both differ fundamentally from `helm exec <alias> <cmd>`, which is one-shot and stateless. A shell or pane retains cwd, env, history, and in-progress prompts across calls; `helm exec` runs ssh once, streams the output, records it, and exits. Use `run` when you just need a command's result and exit code; use `exec` when the output should stream straight back into the conversation with no session to keep.
 
@@ -92,7 +95,7 @@ helm is a sidekick, not a swarm — one shared pane, a plain CLI binary, and an 
 
 ## Audit log
 
-Every `helm exec`, every `helm shell {open,run,send,key,read,list,close}`, and every `helm pane` action (recorded with alias `pane`) writes one JSON line to:
+Every `helm exec`, every `helm shell {open,run,wait,send,key,read,list,close}`, and every `helm pane` action (recorded with alias `pane`) writes one JSON line to:
 
 - Linux/BSD: `$XDG_STATE_HOME/helm/activity.jsonl` (default `~/.local/state/helm/activity.jsonl`)
 - macOS: `~/Library/Application Support/helm/activity.jsonl`

@@ -165,3 +165,14 @@ fn split_leading_label_absent_keeps_all_args() {
     assert!(label.is_none());
     assert_eq!(rest.len(), 3);
 }
+
+#[test]
+fn cmd_wait_rejects_bad_args_before_touching_tmux() {
+    // Both fail in the pure parse, before any pane resolution.
+    let a: Vec<String> = ["--timeout"].iter().map(|s| s.to_string()).collect();
+    assert!(cmd_wait(&a).is_err());
+    let a: Vec<String> = ["bogus"].iter().map(|s| s.to_string()).collect();
+    assert!(cmd_wait(&a).is_err());
+    let a: Vec<String> = ["--timeout", "0"].iter().map(|s| s.to_string()).collect();
+    assert!(cmd_wait(&a).is_err());
+}

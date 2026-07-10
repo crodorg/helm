@@ -68,6 +68,7 @@ pub(crate) fn run_cli(args: &[String]) -> ExitCode {
         "view" => cmd_view(rest),
         "send" => cmd_send(rest),
         "run" => cmd_run(rest),
+        "wait" => cmd_wait(rest),
         "key" => cmd_key(rest),
         "read" => cmd_read(rest),
         "close" => cmd_close(rest),
@@ -107,6 +108,11 @@ usage:
   helm pane send [-l LABEL] <text...>              type a line (auto-Enter)
   helm pane run  [-l LABEL] <cmd...>               run one command; print its
    [--timeout SECS]                                output + `exit: N`
+  helm pane wait [-l LABEL] [--timeout SECS]       block until the pane is
+                                                   back at a shell prompt
+                                                   (default 60s; no exit code
+                                                   — pair with send + read
+                                                   --delta)
   helm pane key  [-l LABEL] <key...>               send raw key specs (Up,
                                                    C-c, Escape; no Enter)
   helm pane read [-l LABEL] [-n N] [--raw|--delta] capture the pane (default
@@ -539,6 +545,37 @@ fn cmd_run(args: &[String]) -> Result<ExitCode> {
         false,
         outcome.exit,
     )))
+}
+
+fn cmd_wait(args: &[String]) -> Result<ExitCode> {
+    let (label, rest) = split_leading_label(args)?;
+    let timeout =
+        opts::parse_wait_timeout(rest, runcmd::DEFAULT_WAIT_TIMEOUT_SECS).map_err(|e| {
+            anyhow!("helm pane wait: {e}\nusage: helm pane wait [-l LABEL] [--timeout SECS]")
+        })?;
+    let anchor = current_pane()?;
+    let win = window_of(&anchor)?;
+    let tag = label_tag(label.as_deref())?;
+    // Resolve only — never create: waiting on a pane that doesn't exist would
+    // conjure a fresh idle shell and report a meaningless "done".
+    let Some(pane) = find_tagged(&win, "@helm_label", &tag)? else {
+        log_pane(ActivityKind::ShellWait, &tag, "", Some(1));
+        eprintln!("helm: no drivable pane `{tag}` in this window — open one with `helm pane open`");
+        return Ok(ExitCode::FAILURE);
+    };
+    let outcome = runcmd::wait_pane(&pane, timeout)?;
+    let (logged, exit) = outcome.logged();
+    log_pane(ActivityKind::ShellWait, &tag, logged, exit);
+    eprintln!(
+        "helm: {}",
+        outcome.report(
+            &format!("pane {tag}"),
+            timeout,
+            "helm pane read --delta",
+            "helm pane open",
+        )
+    );
+    Ok(ExitCode::from(outcome.exit_byte()))
 }
 
 fn cmd_key(args: &[String]) -> Result<ExitCode> {
