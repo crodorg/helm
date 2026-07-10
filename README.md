@@ -3,11 +3,11 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust 2024](https://img.shields.io/badge/edition-2024-dea584.svg)](https://doc.rust-lang.org/edition-guide/rust-2024/)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20OpenBSD-lightgrey.svg)](#)
-[![Status](https://img.shields.io/badge/status-v0.4.3-orange.svg)](#)
+[![Status](https://img.shields.io/badge/status-v0.4.4-orange.svg)](#)
 
-A Rust CLI that lets an AI agent and a human drive the *same* tmux session — local or ssh-remote — with the discipline baked in so neither side breaks the other. The agent can run a command and read its exit code in one call, send raw keys to drive a full-screen TUI, or split a pane right inside your own tmux window. Plus a handful of read-only verbs for inspecting the fleet of hosts those sessions live on.
+A Rust CLI that lets an AI agent and a human drive the *same* tmux session — local or ssh-remote — with the discipline baked in so neither side breaks the other. The agent can run a command and read its exit code in one call (returning the instant it finishes — completion is event-driven, not polled), block until an interactive flow is back at a prompt, poll a long job with delta reads that never re-ingest old output, send raw keys to drive a full-screen TUI, or split a pane right inside your own tmux window. Plus a handful of read-only verbs for inspecting the fleet of hosts those sessions live on.
 
-**Status:** v0.4.3. Two shared-shell surfaces — `helm shell` (a tmux session on any ssh host, or locally) and `helm pane` (a pane in your own tmux window) — plus one-shot `helm exec`, the fleet-inspection verbs, and an append-only audit log. Linux + macOS + OpenBSD supported.
+**Status:** v0.4.4. Two shared-shell surfaces — `helm shell` (a tmux session on any ssh host, or locally) and `helm pane` (a pane in your own tmux window) — plus one-shot `helm exec`, the fleet-inspection verbs, and an append-only audit log. Linux + macOS + OpenBSD supported.
 
 ![helm — inspecting a fleet, splitting a drivable pane in your own tmux, running a command for its output and exit code, and reading the audit log — all from one CLI](docs/demo.gif)
 
@@ -16,6 +16,15 @@ A Rust CLI that lets an AI agent and a human drive the *same* tmux session — l
 Agent shells today are usually one-shot: Claude Code's `Bash` tool ([#9881](https://github.com/anthropics/claude-code/issues/9881), [#4319](https://github.com/anthropics/claude-code/issues/4319)) and most peers spawn fresh subprocesses, lose cwd, hang on interactive prompts, and never let the human watch the agent type. Giving the agent a real persistent tmux session fixes all of that — and in 2025 a cluster of projects converged on the idea ([TmuxAI](https://github.com/alvinunreal/tmuxai), [mitsuhiko/agent-stuff](https://github.com/mitsuhiko/agent-stuff/blob/main/skills/tmux/SKILL.md), [tmux-mcp](https://github.com/bnomei/tmux-mcp), [Hiren Patel's tag-teaming pattern](https://patelhiren.com/blog/tag-teaming-claude-code-with-ai-agent/)).
 
 What's missing is a **plain CLI binary form factor** (no MCP server registration, no skill registry hop, no raw `tmux send-keys` in the agent's mouth) wrapped around an **encoded etiquette** the agent reads before it touches the shell. That's helm.
+
+## Philosophy
+
+- **A sidekick, not a swarm.** One agent and one human in the same shell, watching each other. Orchestrators spawn N agents in N panes; helm deliberately doesn't.
+- **A plain binary, not a server.** No MCP registration, no daemon, no protocol. Anything that can run a shell command can drive helm — and everything that does leaves a record in the same audit log.
+- **The human sees everything.** The agent types into the pane you're attached to, narrates before it sends, and every call lands in an append-only log. Mutating verbs refuse without `--yes`.
+- **Waiting happens in the binary, not in the model.** Agent context is the scarce resource, so every verb is shaped to spend the minimum of it. `run` returns one command's output + exit code in a single ssh round-trip, waking the instant the command signals completion (`tmux wait-for`, not a capture-and-grep loop). `wait` blocks host-side until the pane is back at a prompt. `read --delta` returns only lines it hasn't returned before. An agent that would otherwise sleep-poll `read` — re-ingesting the same scrollback every pass — instead makes one blocking call and reads once.
+- **Etiquette as an artifact.** The discipline isn't a hope, it's a file: the skill ships in this repo and the agent reads it before touching the shell.
+- **Refusal over recovery.** `run` refuses a busy pane rather than fire into a running program; passwords are refused outright; mutations refuse without an explicit flag. Errors you never make don't need cleanup.
 
 ## The discipline
 
@@ -75,7 +84,7 @@ Two surfaces, the same verbs. **`helm shell`** drives a tmux *session* on an ssh
 |---|---|
 | `open <target>` | Attach this terminal to the session. Creates if missing. |
 | `open -d <target>` | Same, but stays detached — pre-create a session you intend to drive. |
-| `run <target> <cmd>` | Run one non-interactive command; print its output + `exit: N` in a single ssh round-trip. Refuses if the pane is busy. |
+| `run <target> <cmd>` | Run one non-interactive command; print its output + `exit: N` in a single ssh round-trip. Completion is event-driven (`tmux wait-for`) — the call returns the instant the command finishes, with a watchdog backstopping shell death and timeouts. Refuses if the pane is busy. |
 | `wait <target> [--timeout S]` | Block until the session is back at a shell prompt (exit 0 done / 124 still busy / 1 gone) — the poll runs host-side in the same single round-trip. The sentinel-free companion to `run` for interactive flows (password prompts, multi-line input): `send`, `wait`, then `read --delta`. |
 | `send <target> <text>` | Type the line + Enter. Lands in the pane the human is attached to. |
 | `key <target> <key…>` | Send raw tmux key specs (`Up`, `C-c`, `Escape`) with no Enter — drive a full-screen TUI, including over ssh. |
@@ -86,6 +95,15 @@ Two surfaces, the same verbs. **`helm shell`** drives a tmux *session* on an ssh
 `helm pane` mirrors `open / run / wait / send / key / read / list / close` for a pane in the current window, plus `view <target>` — a **read-only viewport** onto a remote `helm shell` session so the human watches the agent work live (the agent drives the remote through `helm shell` and never types into the viewport). It needs `$TMUX_PANE` (helm must be running inside the operator's tmux); local shell work with no host named defaults here.
 
 Both differ fundamentally from `helm exec <alias> <cmd>`, which is one-shot and stateless. A shell or pane retains cwd, env, history, and in-progress prompts across calls; `helm exec` runs ssh once, streams the output, records it, and exits. Use `run` when you just need a command's result and exit code; use `exec` when the output should stream straight back into the conversation with no session to keep.
+
+## In practice
+
+helm is daily-driven, not a demo. The reference deployment is a small personal fleet — OpenBSD VPSes carrying web, mail, and relay duty, a Linux box, a Mac — plus the local dev machine, driven by coding agents (Claude Code and peers) through the shipped skill while the operator watches from tmux:
+
+- **Local pane work is the highest-traffic surface.** The agent splits a pane in the operator's own window for builds, test runs, and anything needing `doas`/`sudo` — the human answers the password prompt in the same pane the agent is working in.
+- **Remote sessions carry the ops work** — deploys, migrations, service restarts, log tails — with `helm pane view` giving the operator a live read-only viewport onto what the agent is doing over ssh.
+- **The agent-efficiency verbs earn their keep on long jobs.** A build or test suite becomes `run` (returns at completion with the exit code), an interactive flow becomes `send` → `wait` → `read --delta`, and repeated progress checks stop re-reading the same scrollback.
+- **Fleet verbs are the morning check**: `svc`, `ports`, `logs`, `vultr` — what's running, what's listening, what it costs.
 
 ## Prior art
 
@@ -223,6 +241,19 @@ fi
 ```
 
 helm itself never sets `XDG_RUNTIME_DIR` (or any host env beyond `$PATH`) — the session is the host's own shell, so a fix like this lives in the host's dotfiles, not in helm.
+
+## Limitations
+
+Honest edges, so you don't discover them mid-session:
+
+- **`wait` reports "at a prompt", never an exit code.** It exists for exactly the interactive flows `run` refuses (password prompts, multi-line input), and wrapping those in a sentinel is what's unsafe — so it watches the pane's foreground command instead. `run` remains the exit-code path.
+- **Busy detection is heuristic.** `run`'s busy-guard and `wait` both compare `#{pane_current_command}` against a list of known idle shells; an exotic shell name defeats it.
+- **`read --delta` reseeds on scrollback disruption.** `clear`, a full-screen TUI redraw, or history trimming invalidates the cursor; the next delta read falls back to a full read and starts over.
+- **Event-driven `run` assumes stock tmux `wait-for` semantics** (verified on 3.6). On hosts where the signal can't land, the engine degrades to a 0.5 s poll — never a hang — and a watchdog covers shell death and timeouts either way.
+- **`helm svc` knows three init systems** — rcctl, systemd, launchctl (user domain only). Non-systemd Linux (runit, OpenRC) isn't recognized; OpenBSD needs the three `doas permit nopass` lines above.
+- **Hard requirements.** tmux on every host you open a shell on; system `ssh` with `ssh-agent` loaded (helm has no passphrase UI); `helm pane` only works from inside the operator's own tmux (`$TMUX_PANE`).
+- **Not an orchestrator.** One shared session or pane per target — no N-agent spawning, no scheduling. That's the point, but if you want a swarm, see the orchestrator projects under Prior art.
+- **No Windows.**
 
 ## Layout
 
