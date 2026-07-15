@@ -17,17 +17,12 @@ use crate::tmux::{LOCAL_ALIAS, parse_target, runner_cmd, shell_quote, tmux_prefi
 /// as still-running.
 pub const DEFAULT_RUN_TIMEOUT_SECS: u32 = 30;
 
-/// Default seconds `wait` polls for the pane to return to a shell prompt.
-/// Longer than `run`'s: wait exists for interactive/long flows (doas
-/// prompts, deploys) where the agent parked the pane with `send`.
-pub const DEFAULT_WAIT_TIMEOUT_SECS: u32 = 60;
-
 /// `case`-pattern of foreground commands that mean "the pane is idle at a
 /// shell prompt" — the busy-guard keys off `#{pane_current_command}` rather
 /// than matching the prompt string, which mis-classified themed prompts (fish
 /// `❯`, `>`) as busy and REPL prompts (`mydb=#`) as idle. Anything else means
 /// a command/pager/editor/REPL is running and `run` declines.
-const IDLE_SHELLS: &str = "sh|bash|zsh|ksh|oksh|mksh|loksh|dash|ash|fish|tcsh|csh";
+pub(crate) const IDLE_SHELLS: &str = "sh|bash|zsh|ksh|oksh|mksh|loksh|dash|ash|fish|tcsh|csh";
 
 /// Monotonic per-process counter so concurrent `run` calls get distinct
 /// sentinels without a wall clock. Paired with the pid it makes the sentinel
@@ -50,68 +45,6 @@ pub struct RunOutcome {
     /// destroying the session — so no sentinel could be printed. Distinct
     /// from a timeout: the shell is gone, not still working.
     pub gone: bool,
-}
-
-/// Markers the `wait` scripts print on their own stdout (never into the
-/// pane), so parsing can't collide with pane content.
-const WAIT_DONE: &str = "__helm_wait:done:";
-const WAIT_TIMEOUT: &str = "__helm_wait:timeout:";
-const WAIT_GONE: &str = "__helm_wait:gone:";
-
-/// Outcome of a `helm shell wait` / `helm pane wait`: did the pane's
-/// foreground command return to a shell prompt? No exit code — nothing was
-/// wrapped (that's `run`'s job); `wait` pairs with `send` + `read --delta`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WaitOutcome {
-    /// The pane is back at a shell prompt.
-    Done,
-    /// Still running a foreground command when the poll timed out.
-    Timeout,
-    /// The session/pane is gone (never existed, or died while waiting).
-    Gone,
-}
-
-impl WaitOutcome {
-    /// Activity-log fields for this outcome: the outcome tag and the exit
-    /// column (mirrors `run`'s convention: 0 done, none while running, 1 gone).
-    pub fn logged(self) -> (&'static str, Option<i32>) {
-        match self {
-            WaitOutcome::Done => ("done", Some(0)),
-            WaitOutcome::Timeout => ("timeout", None),
-            WaitOutcome::Gone => ("gone", Some(1)),
-        }
-    }
-
-    /// The process exit byte, matching the `run` contract
-    /// (`opts::run_exit_byte`): 0 done, 124 timeout, 1 gone.
-    pub fn exit_byte(self) -> u8 {
-        match self {
-            WaitOutcome::Done => crate::opts::run_exit_byte(false, false, Some(0)),
-            WaitOutcome::Timeout => crate::opts::run_exit_byte(false, false, None),
-            WaitOutcome::Gone => crate::opts::run_exit_byte(false, true, None),
-        }
-    }
-
-    /// Human report line (without the `helm: ` prefix). `name` names the
-    /// session/pane; `read_hint`/`reopen_hint` are the surface-specific
-    /// follow-up commands.
-    pub fn report(
-        self,
-        name: &str,
-        timeout_secs: u32,
-        read_hint: &str,
-        reopen_hint: &str,
-    ) -> String {
-        match self {
-            WaitOutcome::Done => {
-                format!("{name} is at a shell prompt — new output: `{read_hint}`")
-            }
-            WaitOutcome::Timeout => format!(
-                "still busy after {timeout_secs}s (timeout). Wait again, or peek with `{read_hint}`."
-            ),
-            WaitOutcome::Gone => format!("{name} is gone. Reopen with `{reopen_hint}`."),
-        }
-    }
 }
 
 /// Build the per-call sentinel tag. Split out so the parser tests can mint
@@ -259,98 +192,6 @@ fn build_pane_run_script(
          case \"$__d\" in 1|'') printf '%s\\n' {q_gone}; exit 0 ;; esac; \
          {tmux} capture-pane -t {q_pane} -p -S -500"
     )
-}
-
-/// Host-side poll script for `helm shell wait`: block until the session's
-/// active pane is idle at a shell prompt (same `#{pane_current_command}` /
-/// `IDLE_SHELLS` test as the run busy-guard). Never creates the session —
-/// waiting on a session that doesn't exist reports `gone`, since a fresh
-/// shell would be trivially "done". Requires TWO consecutive idle samples
-/// (0.2s apart, after a 0.3s settle) so a `send` → `wait` race — polling
-/// before the sent command has spawned — can't declare done early.
-fn build_wait_script(tmux: &str, q_session: &str, iters: u32) -> String {
-    format!(
-        "{tmux} has-session -t {q_session} 2>/dev/null || {{ printf '%s\\n' '{WAIT_GONE}'; exit 0; }}; \
-         sleep 0.3; \
-         __ok=0; __i=0; while [ $__i -lt {iters} ]; do \
-           __c=$({tmux} display-message -p -t {q_session} '#{{pane_current_command}}' 2>/dev/null) || \
-             {{ printf '%s\\n' '{WAIT_GONE}'; exit 0; }}; \
-           __c=${{__c#-}}; \
-           case \"$__c\" in {IDLE_SHELLS}) __ok=$(( __ok + 1 )); \
-             [ $__ok -ge 2 ] && {{ printf '%s\\n' '{WAIT_DONE}'; exit 0; }} ;; *) __ok=0 ;; esac; \
-           sleep 0.2; __i=$(( __i + 1 )); \
-         done; \
-         printf '%s\\n' '{WAIT_TIMEOUT}'"
-    )
-}
-
-/// The local `helm pane wait` analogue of `build_wait_script`. Targets a pane
-/// id and uses `#{pane_dead}` for death detection, like `build_pane_run_script`.
-fn build_pane_wait_script(tmux: &str, q_pane: &str, iters: u32) -> String {
-    format!(
-        "sleep 0.3; \
-         __ok=0; __i=0; while [ $__i -lt {iters} ]; do \
-           __s=$({tmux} display-message -p -t {q_pane} '#{{pane_dead}}:#{{pane_current_command}}' 2>/dev/null) || \
-             {{ printf '%s\\n' '{WAIT_GONE}'; exit 0; }}; \
-           case \"$__s\" in 1:*) printf '%s\\n' '{WAIT_GONE}'; exit 0 ;; esac; \
-           __c=${{__s#0:}}; __c=${{__c#-}}; \
-           case \"$__c\" in {IDLE_SHELLS}) __ok=$(( __ok + 1 )); \
-             [ $__ok -ge 2 ] && {{ printf '%s\\n' '{WAIT_DONE}'; exit 0; }} ;; *) __ok=0 ;; esac; \
-           sleep 0.2; __i=$(( __i + 1 )); \
-         done; \
-         printf '%s\\n' '{WAIT_TIMEOUT}'"
-    )
-}
-
-/// Pure parser for the wait scripts' stdout: exactly one marker line.
-fn parse_wait(out: &str) -> Result<WaitOutcome> {
-    for line in out.lines() {
-        match line.trim_end() {
-            WAIT_DONE => return Ok(WaitOutcome::Done),
-            WAIT_TIMEOUT => return Ok(WaitOutcome::Timeout),
-            WAIT_GONE => return Ok(WaitOutcome::Gone),
-            _ => {}
-        }
-    }
-    Err(anyhow!("wait: unrecognized runner output: {}", out.trim()))
-}
-
-/// Block until the session's foreground command returns to a shell prompt —
-/// the poll loop runs host-side in ONE runner invocation (one ssh round-trip
-/// for a remote alias), like `run_command`.
-pub fn wait_session(target: &str, timeout_secs: u32) -> Result<WaitOutcome> {
-    let (alias, session) = parse_target(target);
-    let q_session = shell_quote(&session);
-    let script = build_wait_script(&tmux_prefix(), &q_session, timeout_secs.max(1) * 5);
-    let out = runner_cmd(&alias, &script)
-        .output()
-        .context("spawn tmux wait runner")?;
-    if !out.status.success() {
-        return Err(anyhow!(
-            "`helm shell wait` on {alias} failed (exit {}): {}",
-            out.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    parse_wait(&String::from_utf8_lossy(&out.stdout))
-}
-
-/// Block until an already-resolved local window pane (`%N`) is back at a
-/// shell prompt. The `helm pane wait` engine.
-pub fn wait_pane(pane_id: &str, timeout_secs: u32) -> Result<WaitOutcome> {
-    let q_pane = shell_quote(pane_id);
-    let script = build_pane_wait_script(&tmux_prefix(), &q_pane, timeout_secs.max(1) * 5);
-    let out = runner_cmd(LOCAL_ALIAS, &script)
-        .output()
-        .context("spawn pane wait runner")?;
-    if !out.status.success() {
-        return Err(anyhow!(
-            "`helm pane wait` failed (exit {}): {}",
-            out.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    parse_wait(&String::from_utf8_lossy(&out.stdout))
 }
 
 /// Run `cmd` in an already-resolved window pane (`pane_id`, e.g. `%3`) on the
@@ -615,75 +456,6 @@ mod tests {
         let out = extract_run("hello\nworld\n__helm_1_0:0:\n", "__helm_1_0");
         assert_eq!(out.output, "hello\nworld");
         assert_eq!(out.exit, Some(0));
-    }
-
-    #[test]
-    fn build_wait_script_polls_idle_and_never_creates() {
-        let s = build_wait_script("tmux -u", "helm-deploy", 300);
-        // Gone, not created, when the session is missing.
-        assert!(s.contains("has-session -t helm-deploy"));
-        assert!(!s.contains("new-session"));
-        assert!(!s.contains("send-keys"));
-        // Idle test = current command vs the known-shell set, twice in a row.
-        assert!(s.contains("display-message -p -t helm-deploy '#{pane_current_command}'"));
-        assert!(s.contains("sh|bash|zsh|ksh|oksh"));
-        assert!(s.contains("[ $__ok -ge 2 ]"));
-        assert!(s.contains("[ $__i -lt 300 ]"));
-        assert!(s.contains(WAIT_DONE));
-        assert!(s.contains(WAIT_TIMEOUT));
-        assert!(s.contains(WAIT_GONE));
-    }
-
-    #[test]
-    fn build_pane_wait_script_targets_a_pane_and_checks_death() {
-        let s = build_pane_wait_script("tmux", "%3", 50);
-        assert!(s.contains("-t %3"));
-        assert!(!s.contains("has-session"));
-        assert!(!s.contains("new-session"));
-        assert!(s.contains("#{pane_dead}:#{pane_current_command}"));
-        assert!(s.contains("[ $__ok -ge 2 ]"));
-        assert!(s.contains(WAIT_DONE));
-    }
-
-    #[test]
-    fn wait_outcome_log_exit_and_report_per_state() {
-        assert_eq!(WaitOutcome::Done.logged(), ("done", Some(0)));
-        assert_eq!(WaitOutcome::Timeout.logged(), ("timeout", None));
-        assert_eq!(WaitOutcome::Gone.logged(), ("gone", Some(1)));
-        assert_eq!(WaitOutcome::Done.exit_byte(), 0);
-        assert_eq!(WaitOutcome::Timeout.exit_byte(), 124);
-        assert_eq!(WaitOutcome::Gone.exit_byte(), 1);
-        let r = WaitOutcome::Done.report("session web", 60, "helm shell read web --delta", "x");
-        assert!(r.contains("shell prompt"));
-        assert!(r.contains("helm shell read web --delta"));
-        let r = WaitOutcome::Timeout.report("session web", 5, "read", "x");
-        assert!(r.contains("5s"));
-        let r = WaitOutcome::Gone.report("session web", 60, "read", "helm shell open -d web");
-        assert!(r.contains("gone"));
-        assert!(r.contains("helm shell open -d web"));
-    }
-
-    #[test]
-    fn parse_wait_maps_each_marker() {
-        assert_eq!(
-            parse_wait("__helm_wait:done:\n").unwrap(),
-            WaitOutcome::Done
-        );
-        assert_eq!(
-            parse_wait("__helm_wait:timeout:\n").unwrap(),
-            WaitOutcome::Timeout
-        );
-        assert_eq!(
-            parse_wait("__helm_wait:gone:\n").unwrap(),
-            WaitOutcome::Gone
-        );
-        // Noise around the marker (e.g. a PATH export warning) is tolerated.
-        assert_eq!(
-            parse_wait("warning: x\n__helm_wait:done:\n").unwrap(),
-            WaitOutcome::Done
-        );
-        assert!(parse_wait("").is_err());
-        assert!(parse_wait("garbage\n").is_err());
     }
 
     #[test]

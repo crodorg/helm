@@ -19,6 +19,7 @@ pub mod shell;
 pub mod ssh;
 pub mod tmux;
 pub mod vultr;
+pub mod watch;
 
 use std::process::Command;
 

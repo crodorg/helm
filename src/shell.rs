@@ -10,6 +10,7 @@ use crate::opts;
 use crate::readcursor;
 use crate::runcmd;
 use crate::tmux;
+use crate::watch;
 
 fn print_shell_help() {
     eprintln!(
@@ -42,6 +43,13 @@ usage:
                                       code (nothing wrapped) — for the
                                       interactive flows `run` refuses; pair
                                       with `send` + `read --delta`
+  helm shell watch <target>           block until a predicate holds, then
+   [--idle | --match REGEX]           park (default 60s). --idle = back at a
+   [--timeout SECS]                   shell prompt (same as wait); --match =
+                                      a line matching the extended regex
+                                      appears in NEW output. Exit 0 held /
+                                      124 timeout / 1 gone; pair with
+                                      `send` + `read --delta`
   helm shell key <target> <key...>    send raw tmux key specs (no Enter):
                                       Up Down C-c Escape F1 … to drive a
                                       TUI (vim, htop, menus) on the host
@@ -92,6 +100,7 @@ pub(crate) fn run_cli(args: &[String]) -> std::process::ExitCode {
         "send" => shell_send(&args[1..]),
         "run" => shell_run(&args[1..]),
         "wait" => shell_wait(&args[1..]),
+        "watch" => shell_watch(&args[1..]),
         "key" => shell_key(&args[1..]),
         "read" => shell_read(&args[1..]),
         "list" => shell_list(&args[1..]),
@@ -381,36 +390,60 @@ fn shell_wait(args: &[String]) -> std::process::ExitCode {
         eprintln!("{WAIT_USAGE}");
         return std::process::ExitCode::from(2);
     };
-    let timeout = match opts::parse_wait_timeout(&args[1..], runcmd::DEFAULT_WAIT_TIMEOUT_SECS) {
+    let timeout = match opts::parse_wait_timeout(&args[1..], watch::DEFAULT_WATCH_TIMEOUT_SECS) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("helm shell wait: {e}\n{WAIT_USAGE}");
             return std::process::ExitCode::from(2);
         }
     };
+    // `wait` is `watch --idle` under a stable name.
+    run_shell_watch(target, &watch::Predicate::Idle, timeout)
+}
+
+const WATCH_USAGE: &str =
+    "usage: helm shell watch <target> [--idle | --match REGEX] [--timeout SECS]";
+
+fn shell_watch(args: &[String]) -> std::process::ExitCode {
+    let Some(target) = args.first() else {
+        eprintln!("{WATCH_USAGE}");
+        return std::process::ExitCode::from(2);
+    };
+    let (pred, timeout) = match watch::parse_args(&args[1..], watch::DEFAULT_WATCH_TIMEOUT_SECS) {
+        Ok(pt) => pt,
+        Err(e) => {
+            eprintln!("helm shell watch: {e}\n{WATCH_USAGE}");
+            return std::process::ExitCode::from(2);
+        }
+    };
+    run_shell_watch(target, &pred, timeout)
+}
+
+/// Shared engine for `shell wait` (idle) and `shell watch` (any predicate):
+/// block host-side, log, and report. Both surfaces keep the same activity
+/// kind + exit contract.
+fn run_shell_watch(target: &str, pred: &watch::Predicate, timeout: u32) -> std::process::ExitCode {
     if let Some(code) = reject_bad_label(target) {
         return code;
     }
     let (alias, _) = tmux::parse_target(target);
     let session_label = tmux_label_from_target(target);
-    let res = runcmd::wait_session(target, timeout);
+    let res = watch::watch_session(target, pred, timeout);
     let (logged, exit) = match &res {
         Ok(o) => o.logged(),
         Err(_) => ("", Some(1)),
     };
-    log_action(
-        activity::ActivityKind::ShellWait,
-        &alias,
-        &session_label,
-        "",
-        logged,
-        exit,
-    );
+    let kind = match pred {
+        watch::Predicate::Idle => activity::ActivityKind::ShellWait,
+        watch::Predicate::Match(_) => activity::ActivityKind::ShellWatch,
+    };
+    log_action(kind, &alias, &session_label, "", logged, exit);
     match res {
         Ok(o) => {
             eprintln!(
                 "helm: {}",
                 o.report(
+                    pred,
                     &format!("session {target}"),
                     timeout,
                     &format!("helm shell read {target} --delta"),

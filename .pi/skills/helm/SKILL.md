@@ -69,6 +69,7 @@ helm shell list <alias>                 # which helm-* sessions exist on the hos
 helm shell open -d <target>             # create the session detached, no attach
 helm shell run  <target> "<cmd>"        # run one command, get back its output + `exit: N` (one call)
 helm shell wait <target> [--timeout S]  # block until the session is back at a shell prompt (default 60s)
+helm shell watch <target> [--idle|--match REGEX] [--timeout S]  # block until a predicate holds: --idle = back at a prompt (= wait); --match = a line matching the extended regex (grep -E) appears in NEW output
 helm shell send <target> "<text>"       # type a line (auto-Enter)
 helm shell key  <target> <key...>       # send raw key specs (Up, C-c, Escape) — drive a TUI
 helm shell read <target> [-n LINES]     # scrape scrollback (default 200; trailing blanks stripped, --raw keeps them)
@@ -84,6 +85,7 @@ helm pane view  <target> [--below] [--size N]     # read-only viewport onto a re
 helm pane send  [-l LABEL] "<text>"               # type a line (auto-Enter)
 helm pane run   [-l LABEL] "<cmd>"                # run one command, get back its output + exit: N
 helm pane wait  [-l LABEL] [--timeout S]          # block until the pane is back at a shell prompt
+helm pane watch [-l LABEL] [--idle|--match REGEX] [--timeout S]  # block until a predicate holds (idle = back at a prompt; --match REGEX matches NEW output)
 helm pane key   [-l LABEL] <key...>               # raw key specs (no Enter) — drive a local TUI
 helm pane read  [-l LABEL] [-n N] [--raw]         # capture (default 200, trailing blanks stripped)
 helm pane read  [-l LABEL] --delta                # only lines NEW since my last --delta read
@@ -150,6 +152,8 @@ SSH_AUTH_SOCK=/tmp/<user>-ssh-agent.sock helm shell read web --delta # only the 
 ```
 
 `send`'s exit code only confirms the keystrokes reached tmux, never that the remote command succeeded — and `wait` reports "back at a prompt", never the command's exit code (nothing is wrapped; that's the trade that keeps interactive flows safe). Judge success from the `read --delta` output. (`run` is the exception — its `exit: N` *is* the remote command's status.) `send` → `wait` → `read --delta` is the standard pattern for anything `run` refuses: interactive prompts (doas, passphrases — wait keeps blocking while the operator types), multi-line input, or a pane that was mid-something. For expected-long waits, park the *whole* `helm shell wait` call in a background shell like a long `run` (below). `helm pane wait [-l LABEL]` is the local analogue.
+
+**Waiting on a specific line, not just idle — `watch --match`.** When the tell isn't "back at a prompt" but a known marker in the output (a deploy's `done`, a server's `Listening on`, an error banner), reach for `helm shell watch <target> --match "REGEX"` instead of `wait`. It blocks the same way (host-side poll, one ssh round-trip, zero tokens while waiting) but returns the instant a line matching the extended regex (`grep -E`) appears in output produced *after* the watch started — pre-existing screen text can't trigger it. Exit 0 = matched, 124 = no match at `--timeout` (default 60s), 1 = gone. `--idle` is the default predicate and is exactly `wait`; pass exactly one predicate per call. `helm pane watch [-l LABEL] --match …` is the local analogue, and a long `watch` parks in a background shell just like a long `wait`/`run`.
 
 **Polling? Use `read --delta`.** Any second-and-later read of the same session/pane — confirming a `send`, watching a long command, tailing a log pane — should be `read <target> --delta`: it returns only lines that appeared since my previous `--delta` read, so old scrollback never re-enters my context. First delta (or after `clear`/a TUI redraw, which lose the cursor) falls back to a full read and reseeds — it says so on stderr. `-n` caps a huge delta (skipped lines are reported and stay skipped). Plain `read` remains for the *first* look at an unknown pane state and for TUIs; `--delta` doesn't re-show lines that were rewritten in place (progress bars).
 

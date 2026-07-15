@@ -31,6 +31,7 @@ use crate::opts;
 use crate::readcursor;
 use crate::runcmd::{self, strip_trailing_blank};
 use crate::tmux;
+use crate::watch;
 
 /// Append one audit record for a pane action, mirroring `helm shell`. Pane work
 /// is local (no ssh), so the alias slot is the literal `pane` and the session
@@ -69,6 +70,7 @@ pub(crate) fn run_cli(args: &[String]) -> ExitCode {
         "send" => cmd_send(rest),
         "run" => cmd_run(rest),
         "wait" => cmd_wait(rest),
+        "watch" => cmd_watch(rest),
         "key" => cmd_key(rest),
         "read" => cmd_read(rest),
         "close" => cmd_close(rest),
@@ -113,6 +115,13 @@ usage:
                                                    (default 60s; no exit code
                                                    — pair with send + read
                                                    --delta)
+  helm pane watch [-l LABEL]                       block until a predicate
+   [--idle | --match REGEX] [--timeout SECS]       holds, then park. --idle =
+                                                   back at a prompt (same as
+                                                   wait); --match = a line
+                                                   matching REGEX (grep -E)
+                                                   appears in NEW output.
+                                                   Exit 0/124/1
   helm pane key  [-l LABEL] <key...>               send raw key specs (Up,
                                                    C-c, Escape; no Enter)
   helm pane read [-l LABEL] [-n N] [--raw|--delta] capture the pane (default
@@ -550,25 +559,52 @@ fn cmd_run(args: &[String]) -> Result<ExitCode> {
 fn cmd_wait(args: &[String]) -> Result<ExitCode> {
     let (label, rest) = split_leading_label(args)?;
     let timeout =
-        opts::parse_wait_timeout(rest, runcmd::DEFAULT_WAIT_TIMEOUT_SECS).map_err(|e| {
+        opts::parse_wait_timeout(rest, watch::DEFAULT_WATCH_TIMEOUT_SECS).map_err(|e| {
             anyhow!("helm pane wait: {e}\nusage: helm pane wait [-l LABEL] [--timeout SECS]")
         })?;
+    // `wait` is `watch --idle` under a stable name.
+    run_pane_watch(label, &watch::Predicate::Idle, timeout)
+}
+
+fn cmd_watch(args: &[String]) -> Result<ExitCode> {
+    let (label, rest) = split_leading_label(args)?;
+    let (pred, timeout) =
+        watch::parse_args(rest, watch::DEFAULT_WATCH_TIMEOUT_SECS).map_err(|e| {
+            anyhow!(
+                "helm pane watch: {e}\nusage: helm pane watch [-l LABEL] [--idle | --match REGEX] [--timeout SECS]"
+            )
+        })?;
+    run_pane_watch(label, &pred, timeout)
+}
+
+/// Shared engine for `pane wait` (idle) and `pane watch` (any predicate):
+/// resolve the pane (never create), block host-side, log, and report.
+fn run_pane_watch(
+    label: Option<String>,
+    pred: &watch::Predicate,
+    timeout: u32,
+) -> Result<ExitCode> {
     let anchor = current_pane()?;
     let win = window_of(&anchor)?;
     let tag = label_tag(label.as_deref())?;
-    // Resolve only — never create: waiting on a pane that doesn't exist would
+    let kind = match pred {
+        watch::Predicate::Idle => ActivityKind::ShellWait,
+        watch::Predicate::Match(_) => ActivityKind::ShellWatch,
+    };
+    // Resolve only — never create: watching a pane that doesn't exist would
     // conjure a fresh idle shell and report a meaningless "done".
     let Some(pane) = find_tagged(&win, "@helm_label", &tag)? else {
-        log_pane(ActivityKind::ShellWait, &tag, "", Some(1));
+        log_pane(kind, &tag, "", Some(1));
         eprintln!("helm: no drivable pane `{tag}` in this window — open one with `helm pane open`");
         return Ok(ExitCode::FAILURE);
     };
-    let outcome = runcmd::wait_pane(&pane, timeout)?;
+    let outcome = watch::watch_pane(&pane, pred, timeout)?;
     let (logged, exit) = outcome.logged();
-    log_pane(ActivityKind::ShellWait, &tag, logged, exit);
+    log_pane(kind, &tag, logged, exit);
     eprintln!(
         "helm: {}",
         outcome.report(
+            pred,
             &format!("pane {tag}"),
             timeout,
             "helm pane read --delta",
