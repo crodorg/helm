@@ -467,6 +467,14 @@ fn cmd_view(args: &[String]) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// Move keyboard focus to `pane`, unconditionally, before delivering keys to
+/// it. Deterministic (no state check): the operator may have clicked back to
+/// the pi pane to read the conversation, so every keystroke delivery re-points
+/// tmux here — otherwise a doas password they type lands in the wrong pane.
+fn focus_pane(pane: &str) -> Result<()> {
+    tmux_act(&["select-pane", "-t", pane])
+}
+
 fn cmd_send(args: &[String]) -> Result<ExitCode> {
     let (label, rest) = split_leading_label(args)?;
     if rest.is_empty() {
@@ -477,6 +485,7 @@ fn cmd_send(args: &[String]) -> Result<ExitCode> {
     let win = window_of(&anchor)?;
     let tag = label_tag(label.as_deref())?;
     let pane = ensure_drivable(&win, &anchor, &tag, false, None)?;
+    focus_pane(&pane)?;
     // `--` so a body starting with `-` is literal keys, not a send-keys flag.
     tmux_act(&["send-keys", "-t", &pane, "-l", "--", &text])?;
     tmux_act(&["send-keys", "-t", &pane, "Enter"])?;
@@ -521,6 +530,7 @@ fn cmd_run(args: &[String]) -> Result<ExitCode> {
     let win = window_of(&anchor)?;
     let tag = label_tag(label.as_deref())?;
     let pane = ensure_drivable(&win, &anchor, &tag, false, None)?;
+    focus_pane(&pane)?;
     let outcome = runcmd::run_in_pane(&pane, &cmd, timeout)?;
     if outcome.busy {
         log_pane(ActivityKind::ShellRun, &tag, &cmd, Some(1));
@@ -623,6 +633,7 @@ fn cmd_key(args: &[String]) -> Result<ExitCode> {
     let win = window_of(&anchor)?;
     let tag = label_tag(label.as_deref())?;
     let pane = ensure_drivable(&win, &anchor, &tag, false, None)?;
+    focus_pane(&pane)?;
     let mut v: Vec<String> = vec!["send-keys".into(), "-t".into(), pane.clone(), "--".into()];
     v.extend(rest.iter().cloned());
     let refs: Vec<&str> = v.iter().map(String::as_str).collect();
