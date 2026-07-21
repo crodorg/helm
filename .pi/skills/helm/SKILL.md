@@ -12,7 +12,7 @@ Two surfaces, both driven through the **helm CLI** (never raw tmux), differentia
 - **`helm shell`** — a tmux session on a remote host over ssh. The ONLY way I drive another machine. Auto-opens a **viewport pane** (`helm pane view`) in the operator's window so they watch live; the viewport is read-only *to me* — I drive the remote via `helm shell send/run/key`, the viewport just shows it. The operator *can* type into the viewport (it's a live attach for them): that's where they enter a doas password or hit Ctrl-C, and since it's the same remote tty I drive, a password they type arms doas for my next command.
 - **`helm pane`** — a pane in the very tmux window I'm running in, on the operator's own machine. Default for local shell work ("open a pane", "run it here", no device named). No ssh.
 
-Fundamentally different from `helm exec <alias> <cmd>` — one-shot, output streams back to my conversation, no shell state. Use a shell/pane when the operator wants to *watch* or when shell state (cwd, env, history) matters; `helm exec` otherwise.
+Fundamentally different from `helm exec <alias> <cmd>` — one-shot, output streams back to my conversation, no shell state. Use a shell/pane when the operator wants to *watch* or when shell state (cwd, env, history) matters; `helm exec` otherwise. **Never route a `doas`/`sudo` (or any password-prompting) command through `helm exec`** — it has no visible tty, so a password prompt hangs where the operator can't see or answer it. Anything needing root goes through `helm shell`/`helm pane`, where the viewport lets them type the password.
 
 **Read verbs** — `helm ls/show/svc/ps/ports/vultr/logs/history[<id>]/activity` (`--json` for machine output) — are quick fleet state, lighter than opening a shell. **Mutating verbs** (`vultr reboot|halt|start|snapshot`, `helm run`) are operator-only (refuse without `--yes`); I never invoke them — I narrate intent and let the operator run them.
 
@@ -166,7 +166,7 @@ Narrate intent before sending — **two sentences max** ("About to restart httpd
 
 ## when NOT to use this skill
 
-- Operator wants a quick one-shot output in our conversation → `helm exec <alias> <cmd>`.
+- Operator wants a quick one-shot output in our conversation → `helm exec <alias> <cmd>` — but **not** if it may prompt for a password (`doas`/`sudo`): no visible tty means the operator can't enter it. Route those through `helm shell`/`helm pane`.
 - No session/pane open AND the operator hasn't asked for one → don't create speculatively; ask first.
 - A password prompt **actually appears in scrollback** → stop, tell the operator. Don't preempt (see *doas persistence*).
 - Destructive ops (`rm -rf`, `doas pkg_delete -X`, dropping a DB, force-push) → narrate intent, wait for explicit go-ahead. `run` does not bypass this.
