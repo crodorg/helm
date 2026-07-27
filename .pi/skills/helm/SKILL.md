@@ -102,6 +102,8 @@ helm shell read web --delta                     # only the new output
 
 **Waiting on a specific line, not just idle — `watch --match`.** When the tell is a known marker (a deploy's `done`, a server's `Listening on`, an error banner), `helm shell watch <target> --match "REGEX"` / `helm pane watch [-l LABEL] --match …` blocks the same way but returns the instant a line matching the extended regex (`grep -E`) appears in output produced *after* the watch started (pre-existing text can't trigger it): exit 0 matched / 124 no match at `--timeout` / 1 gone. `--idle` is the default predicate and is exactly `wait`; pass exactly one predicate per call. A long `watch` parks in a background shell like a long `wait`/`run`.
 
+**`--match` is blind to wrapped and redrawn lines.** Matching is per captured line, so a regex spanning a wrapped row can never hit — a pane 40 columns wide splits `plainbrain gate: stop` into `plainbrain gate` and `: stop`, and neither line matches — and a pane that redraws in place can drop the line between captures, the same blind spot `--delta` has with rewritten lines. Against a TUI, a spinner, or any pane whose output wraps, prefer a fixed delay plus `read`, or match one short distinctive token unlikely to wrap.
+
 **Polling? Use `read --delta`.** Any second-and-later read — confirming a `send`, watching a long command, tailing a log pane — should be `--delta`: returns only lines since my previous `--delta` read, so old scrollback never re-enters context. First delta (or after `clear`/a TUI redraw) falls back to a full read and reseeds — it says so on stderr. `-n` caps a huge delta. Plain `read` is for the *first* look at an unknown pane and for TUIs; `--delta` doesn't re-show lines rewritten in place (progress bars).
 
 ---
