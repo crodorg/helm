@@ -8,3 +8,6 @@ config.toml
 
 # Claude Code session markers (hooks write here)
 .claude/state/
+
+# plainbrain ephemeral session state (hooks write here)
+.plainbrain/
