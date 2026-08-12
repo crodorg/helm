@@ -147,32 +147,13 @@ fn exec_local(cmd: &str) -> std::process::ExitCode {
     match runcmd::run_command(EXEC_LOCAL_TARGET, cmd, runcmd::DEFAULT_RUN_TIMEOUT_SECS) {
         Ok(outcome) => {
             // Same per-state narration as `helm shell run`, exec-flavored.
-            let logged = if outcome.busy {
-                eprintln!(
-                    "helm: exec session busy (a previous `helm exec local` command is still \
-                     running). Poll with `helm shell read {EXEC_LOCAL_TARGET}`."
-                );
-                "busy".to_string()
-            } else if outcome.gone {
-                eprintln!(
-                    "helm: the command terminated the exec session — no exit code. \
-                     The next `helm exec local` recreates it."
-                );
-                "gone".to_string()
-            } else {
-                if !outcome.output.is_empty() {
-                    println!("{}", outcome.output);
-                }
-                match outcome.exit {
-                    Some(code) => eprintln!("exit: {code}"),
-                    None => eprintln!(
-                        "helm: command still running after {}s (timeout). Poll with \
-                         `helm shell read {EXEC_LOCAL_TARGET}`.",
-                        runcmd::DEFAULT_RUN_TIMEOUT_SECS
-                    ),
-                }
-                activity::preview(&outcome.output)
-            };
+            let (stderr_msg, logged) = exec_local_narration(&outcome);
+            if !outcome.busy && !outcome.gone && !outcome.output.is_empty() {
+                println!("{}", outcome.output);
+            }
+            if let Some(msg) = stderr_msg {
+                eprintln!("{msg}");
+            }
             log_action(
                 activity::ActivityKind::Exec,
                 &alias,
@@ -211,6 +192,41 @@ fn exec_local(cmd: &str) -> std::process::ExitCode {
 /// ever starting one. Pure builder so the shape is unit-tested.
 fn exec_local_probe_script() -> String {
     format!("{} info >/dev/null 2>&1", tmux::tmux_prefix())
+}
+
+/// Pure per-state narration for `exec_local`: the stderr message (None for a
+/// plain successful exit — its output already went to stdout) and the string
+/// logged as the activity preview. Split from the I/O so the state mapping is
+/// unit-tested.
+fn exec_local_narration(outcome: &runcmd::RunOutcome) -> (Option<String>, String) {
+    if outcome.busy {
+        (
+            Some(format!(
+                "helm: exec session busy (a previous `helm exec local` command is still \
+                 running). Poll with `helm shell read {EXEC_LOCAL_TARGET}`."
+            )),
+            "busy".to_string(),
+        )
+    } else if outcome.gone {
+        (
+            Some(
+                "helm: the command terminated the exec session — no exit code. \
+                 The next `helm exec local` recreates it."
+                    .to_string(),
+            ),
+            "gone".to_string(),
+        )
+    } else {
+        let msg = match outcome.exit {
+            Some(code) => format!("exit: {code}"),
+            None => format!(
+                "helm: command still running after {}s (timeout). Poll with \
+                 `helm shell read {EXEC_LOCAL_TARGET}`.",
+                runcmd::DEFAULT_RUN_TIMEOUT_SECS
+            ),
+        };
+        (Some(msg), activity::preview(&outcome.output))
+    }
 }
 
 /// Spawn `cmd` on `alias`, stream its output live, and record the completed run
@@ -574,6 +590,27 @@ mod tests {
         assert!(script.contains(" info"), "{script}");
         assert!(!script.contains("new-session"), "{script}");
         assert!(!script.contains("start-server"), "{script}");
+    }
+
+    #[test]
+    fn exec_local_narration_maps_each_state() {
+        let mk = |busy, gone, exit, output: &str| runcmd::RunOutcome {
+            output: output.to_string(),
+            exit,
+            busy,
+            gone,
+        };
+        let (msg, logged) = exec_local_narration(&mk(true, false, None, ""));
+        assert!(msg.unwrap().contains("busy"));
+        assert_eq!(logged, "busy");
+        let (msg, logged) = exec_local_narration(&mk(false, true, None, ""));
+        assert!(msg.unwrap().contains("terminated the exec session"));
+        assert_eq!(logged, "gone");
+        let (msg, logged) = exec_local_narration(&mk(false, false, Some(7), "out"));
+        assert_eq!(msg.unwrap(), "exit: 7");
+        assert_eq!(logged, "out");
+        let (msg, _) = exec_local_narration(&mk(false, false, None, "out"));
+        assert!(msg.unwrap().contains("still running"));
     }
 
     #[test]

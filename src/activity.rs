@@ -164,6 +164,12 @@ fn environmental_write_error(e: &std::io::Error) -> bool {
 /// Append a record. Best-effort: a failure here never blocks the caller.
 pub fn append(record: &ActivityRecord) {
     let Some(path) = log_path() else { return };
+    append_to(&path, record);
+}
+
+/// [`append`]'s path-parameterized core, split out so tests can exercise the
+/// write path against a temp file without the data-racy global `set_var`.
+fn append_to(path: &std::path::Path, record: &ActivityRecord) {
     let line = match serde_json::to_string(record) {
         Ok(s) => s,
         Err(e) => {
@@ -171,7 +177,7 @@ pub fn append(record: &ActivityRecord) {
             return;
         }
     };
-    let mut file = match OpenOptions::new().create(true).append(true).open(&path) {
+    let mut file = match OpenOptions::new().create(true).append(true).open(path) {
         Ok(f) => f,
         Err(e) if environmental_write_error(&e) => return,
         Err(e) => {
@@ -198,7 +204,12 @@ pub fn tail(limit: usize) -> Vec<ActivityRecord> {
     let Some(path) = log_path() else {
         return Vec::new();
     };
-    let raw = match std::fs::read_to_string(&path) {
+    tail_from(&path, limit)
+}
+
+/// [`tail`]'s path-parameterized core (see [`append_to`] for why).
+fn tail_from(path: &std::path::Path, limit: usize) -> Vec<ActivityRecord> {
+    let raw = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
@@ -311,6 +322,38 @@ mod tests {
         assert!(!environmental_write_error(
             &std::io::Error::from_raw_os_error(2)
         )); // ENOENT
+    }
+
+    #[test]
+    fn append_tail_roundtrip_skips_malformed_and_caps() {
+        let dir = std::env::temp_dir().join(format!("helm-act-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("activity.jsonl");
+        let _ = std::fs::remove_file(&path);
+        for i in 0..3 {
+            let r = ActivityRecord::build(
+                ActivityKind::Exec,
+                "local",
+                "helm-exec",
+                &format!("echo {i}"),
+                "out",
+                Some(0),
+            );
+            append_to(&path, &r);
+        }
+        // A half-written line must be skipped, not abort the tail.
+        use std::io::Write as _;
+        let mut f = OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(f, "{{\"ts_unix\":1}}garbage").unwrap();
+        let all = tail_from(&path, 10);
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].cmd, "echo 0");
+        let capped = tail_from(&path, 2);
+        assert_eq!(capped.len(), 2);
+        assert_eq!(capped[0].cmd, "echo 1"); // oldest dropped
+        // Unwritable target (EACCES) is silent best-effort — must not panic.
+        append_to(std::path::Path::new("/proc/1/root/x"), &all[0]);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
