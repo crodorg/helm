@@ -214,22 +214,35 @@ fn tail_from(path: &std::path::Path, limit: usize) -> Vec<ActivityRecord> {
         Err(_) => return Vec::new(),
     };
     let mut out: Vec<ActivityRecord> = Vec::new();
+    // Malformed entries are counted and reported ONCE below: a decades-old
+    // log can carry hundreds of corrupt lines, and one warning per line
+    // buried the actual records (measured: `helm activity -n 2` printing
+    // ~500 warning lines into an agent's captured output).
+    let mut malformed = 0usize;
+    let mut first_bad = 0usize;
     for (i, line) in raw.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
         match serde_json::from_str::<ActivityRecord>(line) {
             Ok(r) => out.push(r),
-            Err(e) => {
-                // Don't drop silently — surface to stderr so the
-                // operator notices half-written / corrupted entries
-                // that would otherwise vanish from the audit pane.
-                eprintln!(
-                    "helm: activity tail: skipping malformed line {} ({e})",
-                    i + 1
-                );
+            Err(_) => {
+                if malformed == 0 {
+                    first_bad = i + 1;
+                }
+                malformed += 1;
             }
         }
+    }
+    if malformed > 0 {
+        // Don't drop silently — surface to stderr so the operator notices
+        // half-written / corrupted entries that would otherwise vanish from
+        // the audit pane.
+        eprintln!(
+            "helm: activity tail: skipped {malformed} malformed line(s) (first at line \
+             {first_bad} of {})",
+            path.display()
+        );
     }
     if out.len() > limit {
         let drop = out.len() - limit;
