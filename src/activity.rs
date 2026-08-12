@@ -357,6 +357,22 @@ mod tests {
     }
 
     #[test]
+    fn kind_labels_are_stable() {
+        // `helm activity` renders these; a rename silently breaks operator
+        // greps over the audit pane.
+        assert_eq!(ActivityKind::Exec.label(), "exec");
+        assert_eq!(ActivityKind::ShellOpen.label(), "open");
+        assert_eq!(ActivityKind::ShellRun.label(), "run");
+        assert_eq!(ActivityKind::ShellRead.label(), "read");
+        assert_eq!(ActivityKind::ShellClose.label(), "close");
+        assert_eq!(ActivityKind::ShellSend.label(), "send");
+        assert_eq!(ActivityKind::ShellWait.label(), "wait");
+        assert_eq!(ActivityKind::ShellWatch.label(), "watch");
+        assert_eq!(ActivityKind::ShellKey.label(), "key");
+        assert_eq!(ActivityKind::ShellList.label(), "list");
+    }
+
+    #[test]
     fn privilege_escalation_at_start() {
         assert!(has_privilege_escalation("doas rcctl restart httpd"));
         assert!(has_privilege_escalation("sudo apt update"));

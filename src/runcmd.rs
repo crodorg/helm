@@ -243,11 +243,7 @@ pub fn run_ephemeral_local(
 ) -> Result<(RunOutcome, String)> {
     let tmux = tmux_prefix();
     let tag = run_tag();
-    // The tag doubles as the uniqueness source for the session name; the
-    // `exec-` label prefix keeps it apart from operator `local:*` sessions
-    // and legible in `tmux ls` (`helm-exec-<pid>-<seq>`).
-    let label = format!("exec-{}", tag.trim_start_matches("__helm_"));
-    let session = format!("helm-{label}");
+    let (label, session) = exec_label(&tag);
     let q_session = shell_quote(&session);
     let q_cwd = shell_quote(&cwd.to_string_lossy());
     let payload = run_payload(cmd, &tag);
@@ -273,6 +269,18 @@ pub fn run_ephemeral_local(
         extract_run(&String::from_utf8_lossy(&out.stdout), &tag),
         label,
     ))
+}
+
+/// Session label + name for one ephemeral exec-local call. The per-call tag
+/// is the uniqueness source; the `exec-` prefix keeps the session apart from
+/// operator `local:*` sessions and legible in `tmux ls`
+/// (`helm-exec-<pid>_<seq>`). Pure so the valid-label invariant is
+/// unit-tested: the timeout narration hands the label to `helm shell
+/// read/close local:<label>`, which rejects labels outside `valid_label`.
+fn exec_label(tag: &str) -> (String, String) {
+    let label = format!("exec-{}", tag.trim_start_matches("__helm_"));
+    let session = format!("helm-{label}");
+    (label, session)
 }
 
 /// The ephemeral-session analogue of `build_run_script`. Creates the per-call
@@ -441,6 +449,27 @@ mod tests {
         let a = run_tag();
         let b = run_tag();
         assert_ne!(a, b);
+        let (label_a, session_a) = exec_label(&a);
+        let (label_b, _) = exec_label(&b);
+        assert_ne!(label_a, label_b);
+        assert_eq!(session_a, format!("helm-{label_a}"));
+        assert!(label_a.starts_with("exec-"));
+        // The timeout narration points `helm shell read/close local:<label>`
+        // at this label — it must pass the target label validator.
+        assert!(crate::tmux::valid_label(&label_a), "{label_a}");
+    }
+
+    #[test]
+    fn run_payload_wraps_cmd_with_markers_and_signal() {
+        let p = run_payload("echo hi", "__helm_9_9");
+        // Start marker first, command, exit sentinel with the shell's $?,
+        // then the wait-for wake — in that order.
+        let s = p.find("__helm_9_9:s:").expect("start marker");
+        let c = p.find("echo hi").expect("command");
+        let e = p.find("__helm_9_9:%d:").expect("exit sentinel");
+        let w = p.find("tmux wait-for -S __helm_9_9").expect("signal");
+        assert!(s < c && c < e && e < w, "{p}");
+        assert!(p.contains("\"$?\""), "{p}");
     }
 
     #[test]
