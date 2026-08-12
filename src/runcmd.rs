@@ -225,6 +225,94 @@ pub fn run_in_pane(pane_id: &str, cmd: &str, timeout_secs: u32) -> Result<RunOut
     Ok(extract_run(&String::from_utf8_lossy(&out.stdout), &tag))
 }
 
+/// The `helm exec local` engine: run `cmd` in an *ephemeral* session on the
+/// local tmux server — created for this call in the caller's cwd, killed
+/// after the capture — so one shot ≈ one fresh shell, like the plain fork
+/// this replaced (no sticky `cd`/`export`, no busy collisions between
+/// concurrent execs, no command/output lingering in a well-known session's
+/// scrollback). Routing through the server is the point: helm may be invoked
+/// from inside a sandboxed caller, and the server-side fork escapes that
+/// sandbox. Returns the session's label alongside the outcome — on timeout
+/// the session is left alive (killing it would SIGHUP the still-running
+/// command), and the label lets the caller point at `helm shell read
+/// local:<label>`. `busy` is never set (the session is private to this call).
+pub fn run_ephemeral_local(
+    cmd: &str,
+    timeout_secs: u32,
+    cwd: &std::path::Path,
+) -> Result<(RunOutcome, String)> {
+    let tmux = tmux_prefix();
+    let tag = run_tag();
+    // The tag doubles as the uniqueness source for the session name; the
+    // `exec-` label prefix keeps it apart from operator `local:*` sessions
+    // and legible in `tmux ls` (`helm-exec-<pid>-<seq>`).
+    let label = format!("exec-{}", tag.trim_start_matches("__helm_"));
+    let session = format!("helm-{label}");
+    let q_session = shell_quote(&session);
+    let q_cwd = shell_quote(&cwd.to_string_lossy());
+    let payload = run_payload(cmd, &tag);
+    let q_payload = shell_quote(&payload);
+    let q_grep = shell_quote(&format!("{tag}:[0-9]"));
+    let q_gone = shell_quote(&format!("{tag}:gone:"));
+    let q_chan = shell_quote(&tag);
+    let iters = timeout_secs.max(1) * 2; // 0.5s watchdog period
+    let script = build_ephemeral_run_script(
+        &tmux, &q_session, &q_cwd, &q_payload, &q_grep, &q_gone, &q_chan, iters,
+    );
+    let out = runner_cmd(LOCAL_ALIAS, &script)
+        .output()
+        .context("spawn exec local runner")?;
+    if !out.status.success() {
+        return Err(anyhow!(
+            "`helm exec local` failed (exit {}): {}",
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok((
+        extract_run(&String::from_utf8_lossy(&out.stdout), &tag),
+        label,
+    ))
+}
+
+/// The ephemeral-session analogue of `build_run_script`. Creates the per-call
+/// session in the caller's cwd (`-c`; tmux falls back to its default when the
+/// dir doesn't exist server-side), so no busy-guard: the shell is born idle
+/// and private. Same event-driven wait-for + watchdog as `build_run_script`.
+/// The final capture is held in a variable so the session can be killed
+/// after a *completed* run (sentinel present) but left alive on timeout —
+/// killing it then would SIGHUP the still-running command.
+#[allow(clippy::too_many_arguments)]
+fn build_ephemeral_run_script(
+    tmux: &str,
+    q_session: &str,
+    q_cwd: &str,
+    q_payload: &str,
+    q_grep: &str,
+    q_gone: &str,
+    q_chan: &str,
+    iters: u32,
+) -> String {
+    format!(
+        "{tmux} new-session -d -x 200 -y 50 -c {q_cwd} -s {q_session} || exit 97; \
+         {tmux} send-keys -t {q_session} -l -- {q_payload}; \
+         {tmux} send-keys -t {q_session} Enter; \
+         ( __i=0; while [ $__i -lt {iters} ]; do \
+             {tmux} has-session -t {q_session} 2>/dev/null || break; \
+             {tmux} capture-pane -t {q_session} -p -S -500 | grep -E -q -e {q_grep} && break; \
+             sleep 0.5; __i=$(( __i + 1 )); \
+           done; {tmux} wait-for -S {q_chan} ) >/dev/null 2>&1 & __w=$!; \
+         {tmux} wait-for {q_chan}; \
+         kill $__w 2>/dev/null; \
+         {tmux} has-session -t {q_session} 2>/dev/null || {{ printf '%s\\n' {q_gone}; exit 0; }}; \
+         __cap=$({tmux} capture-pane -t {q_session} -p -S -500); \
+         printf '%s\\n' \"$__cap\"; \
+         printf '%s\\n' \"$__cap\" | grep -E -q -e {q_grep} && \
+           {tmux} kill-session -t {q_session} 2>/dev/null; \
+         exit 0"
+    )
+}
+
 /// Pure parser: pull the command's output and exit code out of the wrapper's
 /// final pane capture. Kept free of I/O so the sentinel-extraction logic is
 /// unit-tested directly. See `run_command` for the sentinel shape.
@@ -317,6 +405,43 @@ pub fn strip_trailing_blank(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ephemeral_script_creates_in_cwd_and_kills_only_after_sentinel() {
+        let s = build_ephemeral_run_script(
+            "tmux",
+            "'helm-exec-1-0'",
+            "'/proj'",
+            "'payload'",
+            "'__helm_1_0:[0-9]'",
+            "'__helm_1_0:gone:'",
+            "'__helm_1_0'",
+            60,
+        );
+        // Fresh session in the caller's cwd; hard-fails (exit 97) if the
+        // server can't create it — never a busy-guard, never a reuse.
+        assert!(s.contains("new-session -d -x 200 -y 50 -c '/proj' -s 'helm-exec-1-0' || exit 97"));
+        // The kill is gated on the sentinel being present in the capture: a
+        // timed-out (still running) command must keep its session alive.
+        let kill_at = s.find("kill-session").expect("kill-session present");
+        // rfind: the same grep pattern also appears in the watchdog loop;
+        // the *last* occurrence is the kill gate.
+        let gate_at = s
+            .rfind("grep -E -q -e '__helm_1_0:[0-9]' && ")
+            .expect("gated");
+        assert!(gate_at < kill_at);
+        // No busy sentinel — the session is private to the call.
+        assert!(!s.contains(":busy:"));
+    }
+
+    #[test]
+    fn ephemeral_sessions_are_unique_per_call() {
+        // The label derives from the per-process tag counter, so two calls
+        // can't collide on a session (the source of the old busy/sticky bugs).
+        let a = run_tag();
+        let b = run_tag();
+        assert_ne!(a, b);
+    }
 
     #[test]
     fn strip_trailing_blank_drops_pane_padding() {

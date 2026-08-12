@@ -115,18 +115,14 @@ fn run_exec_cli(args: &[String]) -> std::process::ExitCode {
     stream_and_record("helm exec", RunSource::Agent, &alias, &cmd)
 }
 
-/// Session target for `helm exec local`: a dedicated session on the local
-/// tmux server (`helm-exec` after `parse_target`), kept apart from the
-/// operator's `helm shell open local:*` sessions.
-pub const EXEC_LOCAL_TARGET: &str = "local:exec";
-
-/// `helm exec local` — run the command in the `helm-exec` session on the
-/// local tmux server via the `runcmd` sentinel engine (shell-run semantics:
-/// 30s poll timeout, busy/gone detection). Requires a *running* server: when
-/// it is unreachable (no server, or the socket is masked by the caller's
-/// sandbox) this fails loudly and never falls back to an in-process fork —
-/// a fallback would silently reintroduce the sandbox-inheritance bug — and
-/// never auto-starts a server, which would itself be born inside the fence.
+/// `helm exec local` — run the command in an ephemeral per-call session on
+/// the local tmux server via the `runcmd` sentinel engine (fresh shell in the
+/// caller's cwd, killed after the run; 30s poll timeout). Requires a
+/// *running* server: when it is unreachable (no server, or the socket is
+/// masked by the caller's sandbox) this fails loudly and never falls back to
+/// an in-process fork — a fallback would silently reintroduce the
+/// sandbox-inheritance bug — and never auto-starts a server, which would
+/// itself be born inside the fence.
 fn exec_local(cmd: &str) -> std::process::ExitCode {
     if cmd.contains('\n') {
         // The sentinel wrapper needs a single line (same limit as shell run).
@@ -143,11 +139,11 @@ fn exec_local(cmd: &str) -> std::process::ExitCode {
         );
         return std::process::ExitCode::FAILURE;
     }
-    let (alias, session) = tmux::parse_target(EXEC_LOCAL_TARGET);
-    match runcmd::run_command(EXEC_LOCAL_TARGET, cmd, runcmd::DEFAULT_RUN_TIMEOUT_SECS) {
-        Ok(outcome) => {
-            // Same per-state narration as `helm shell run`, exec-flavored.
-            let (stderr_msg, logged) = exec_local_narration(&outcome);
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
+    match runcmd::run_ephemeral_local(cmd, runcmd::DEFAULT_RUN_TIMEOUT_SECS, &cwd) {
+        Ok((outcome, label)) => {
+            // Same per-state narration shape as `helm shell run`, exec-flavored.
+            let (stderr_msg, logged) = exec_local_narration(&outcome, &label);
             if !outcome.busy && !outcome.gone && !outcome.output.is_empty() {
                 println!("{}", outcome.output);
             }
@@ -156,8 +152,8 @@ fn exec_local(cmd: &str) -> std::process::ExitCode {
             }
             log_action(
                 activity::ActivityKind::Exec,
-                &alias,
-                &session,
+                tmux::LOCAL_ALIAS,
+                &format!("helm-{label}"),
                 cmd,
                 &logged,
                 outcome.exit.or(if outcome.busy || outcome.gone {
@@ -175,8 +171,8 @@ fn exec_local(cmd: &str) -> std::process::ExitCode {
         Err(e) => {
             log_action(
                 activity::ActivityKind::Exec,
-                &alias,
-                &session,
+                tmux::LOCAL_ALIAS,
+                "",
                 cmd,
                 "",
                 Some(1),
@@ -195,37 +191,40 @@ fn exec_local_probe_script() -> String {
 }
 
 /// Pure per-state narration for `exec_local`: the stderr message (None for a
-/// plain successful exit — its output already went to stdout) and the string
-/// logged as the activity preview. Split from the I/O so the state mapping is
-/// unit-tested.
-fn exec_local_narration(outcome: &runcmd::RunOutcome) -> (Option<String>, String) {
+/// clean zero exit — its output already went to stdout, and a spurious
+/// "exit: 0" on stderr flakes wrappers that treat stderr as a failure
+/// signal) and the string logged as the activity preview. `label` names the
+/// call's ephemeral session (`local:<label>`) so the timeout pointer targets
+/// the right one. Split from the I/O so the state mapping is unit-tested.
+fn exec_local_narration(outcome: &runcmd::RunOutcome, label: &str) -> (Option<String>, String) {
     if outcome.busy {
+        // Unreachable with the ephemeral engine (private session), kept for
+        // RunOutcome completeness.
         (
-            Some(format!(
-                "helm: exec session busy (a previous `helm exec local` command is still \
-                 running). Poll with `helm shell read {EXEC_LOCAL_TARGET}`."
-            )),
+            Some("helm: exec session busy".to_string()),
             "busy".to_string(),
         )
     } else if outcome.gone {
         (
             Some(
-                "helm: the command terminated the exec session — no exit code. \
-                 The next `helm exec local` recreates it."
+                "helm: the command terminated its shell — no exit code (its ephemeral \
+                 session is gone)."
                     .to_string(),
             ),
             "gone".to_string(),
         )
     } else {
         let msg = match outcome.exit {
-            Some(code) => format!("exit: {code}"),
-            None => format!(
-                "helm: command still running after {}s (timeout). Poll with \
-                 `helm shell read {EXEC_LOCAL_TARGET}`.",
+            Some(0) => None,
+            Some(code) => Some(format!("exit: {code}")),
+            None => Some(format!(
+                "helm: command still running after {}s (timeout). It keeps running in \
+                 session local:{label} — poll with `helm shell read local:{label}`, close \
+                 with `helm shell close local:{label}` when done.",
                 runcmd::DEFAULT_RUN_TIMEOUT_SECS
-            ),
+            )),
         };
-        (Some(msg), activity::preview(&outcome.output))
+        (msg, activity::preview(&outcome.output))
     }
 }
 
@@ -574,14 +573,6 @@ mod tests {
     }
 
     #[test]
-    fn exec_local_target_names_dedicated_session() {
-        // exec local must land in its own session, not the operator's `helm`.
-        let (alias, session) = tmux::parse_target(EXEC_LOCAL_TARGET);
-        assert_eq!(alias, tmux::LOCAL_ALIAS);
-        assert_eq!(session, "helm-exec");
-    }
-
-    #[test]
     fn exec_local_probe_connects_without_starting_a_server() {
         // `tmux info` fails when no server is reachable; anything that can
         // CREATE a server (new-session, start-server) would be born inside a
@@ -600,17 +591,24 @@ mod tests {
             busy,
             gone,
         };
-        let (msg, logged) = exec_local_narration(&mk(true, false, None, ""));
+        let (msg, logged) = exec_local_narration(&mk(true, false, None, ""), "exec-1-0");
         assert!(msg.unwrap().contains("busy"));
         assert_eq!(logged, "busy");
-        let (msg, logged) = exec_local_narration(&mk(false, true, None, ""));
-        assert!(msg.unwrap().contains("terminated the exec session"));
+        let (msg, logged) = exec_local_narration(&mk(false, true, None, ""), "exec-1-0");
+        assert!(msg.unwrap().contains("terminated its shell"));
         assert_eq!(logged, "gone");
-        let (msg, logged) = exec_local_narration(&mk(false, false, Some(7), "out"));
+        let (msg, logged) = exec_local_narration(&mk(false, false, Some(7), "out"), "exec-1-0");
         assert_eq!(msg.unwrap(), "exit: 7");
         assert_eq!(logged, "out");
-        let (msg, _) = exec_local_narration(&mk(false, false, None, "out"));
-        assert!(msg.unwrap().contains("still running"));
+        // Clean zero exit: no stderr narration (wrappers treat stderr as failure).
+        let (msg, logged) = exec_local_narration(&mk(false, false, Some(0), "out"), "exec-1-0");
+        assert!(msg.is_none());
+        assert_eq!(logged, "out");
+        // Timeout points at this call's ephemeral session.
+        let (msg, _) = exec_local_narration(&mk(false, false, None, "out"), "exec-1-0");
+        let msg = msg.unwrap();
+        assert!(msg.contains("still running"));
+        assert!(msg.contains("local:exec-1-0"));
     }
 
     #[test]
