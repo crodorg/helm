@@ -14,6 +14,8 @@ Two surfaces, both driven through the **helm CLI** (never raw tmux), differentia
 
 Fundamentally different from `helm exec <alias> <cmd>` — one-shot, output streams back to my conversation, no shell state. Use a shell/pane when the operator wants to *watch* or when shell state (cwd, env, history) matters; `helm exec` otherwise. **Never route a `doas`/`sudo` (or any password-prompting) command through `helm exec`** — it has no visible tty, so a password prompt hangs where the operator can't see or answer it. Anything needing root goes through `helm shell`/`helm pane`, where the viewport lets them type the password.
 
+**`helm exec local` runs through the local tmux server**, not in-process: the command executes in a dedicated `helm-exec` session (shell-run semantics — 30s poll timeout, busy/gone detection), so when I call helm from inside a sandbox fence the command escapes it — the tmux server lives outside the fence. It needs a *running, reachable* server: with the socket masked (opt-in hard fence) it fails loudly and never falls back to an in-process fork. Remote `helm exec <alias>` is unchanged (direct ssh).
+
 **Read verbs** — `helm ls/show/svc/ps/ports/vultr/logs/history[<id>]/activity` (`--json` for machine output) — are quick fleet state, lighter than opening a shell. **Mutating verbs** (`vultr reboot|halt|start|snapshot`, `helm run`) are operator-only (refuse without `--yes`); I never invoke them — I narrate intent and let the operator run them.
 
 ---

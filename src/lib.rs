@@ -100,9 +100,117 @@ fn run_exec_cli(args: &[String]) -> std::process::ExitCode {
     }
     let cmd = args[1..].join(" ");
 
+    if alias == tmux::LOCAL_ALIAS {
+        // The local alias must NOT fork in-process: helm is often invoked
+        // from inside a sandboxed caller (an agent harness fence), and an
+        // in-process `sh -c` inherits that sandbox — defeating the escape
+        // hatch. Route through the local tmux server instead (same engine as
+        // `helm shell run`): the server lives outside the caller's fence, so
+        // the forked shell escapes it.
+        return exec_local(&cmd);
+    }
+
     // Direct ssh spawn — no daemon; the transcript is streamed, recorded to
     // history under the `agent` source, and logged (same path as `helm run`).
     stream_and_record("helm exec", RunSource::Agent, &alias, &cmd)
+}
+
+/// Session target for `helm exec local`: a dedicated session on the local
+/// tmux server (`helm-exec` after `parse_target`), kept apart from the
+/// operator's `helm shell open local:*` sessions.
+pub const EXEC_LOCAL_TARGET: &str = "local:exec";
+
+/// `helm exec local` — run the command in the `helm-exec` session on the
+/// local tmux server via the `runcmd` sentinel engine (shell-run semantics:
+/// 30s poll timeout, busy/gone detection). Requires a *running* server: when
+/// it is unreachable (no server, or the socket is masked by the caller's
+/// sandbox) this fails loudly and never falls back to an in-process fork —
+/// a fallback would silently reintroduce the sandbox-inheritance bug — and
+/// never auto-starts a server, which would itself be born inside the fence.
+fn exec_local(cmd: &str) -> std::process::ExitCode {
+    if cmd.contains('\n') {
+        // The sentinel wrapper needs a single line (same limit as shell run).
+        eprintln!("helm exec local: command must be a single line (no newlines)");
+        return std::process::ExitCode::from(2);
+    }
+    let probe = tmux::runner_cmd(tmux::LOCAL_ALIAS, &exec_local_probe_script()).status();
+    if !probe.map(|s| s.success()).unwrap_or(false) {
+        eprintln!(
+            "helm exec local: no reachable local tmux server. exec local runs the command \
+             through the tmux server so it escapes a sandboxed caller, and never falls back \
+             to an in-process fork. Start tmux (outside any sandbox) and retry, or target an \
+             existing pane with `helm pane run`."
+        );
+        return std::process::ExitCode::FAILURE;
+    }
+    let (alias, session) = tmux::parse_target(EXEC_LOCAL_TARGET);
+    match runcmd::run_command(EXEC_LOCAL_TARGET, cmd, runcmd::DEFAULT_RUN_TIMEOUT_SECS) {
+        Ok(outcome) => {
+            // Same per-state narration as `helm shell run`, exec-flavored.
+            let logged = if outcome.busy {
+                eprintln!(
+                    "helm: exec session busy (a previous `helm exec local` command is still \
+                     running). Poll with `helm shell read {EXEC_LOCAL_TARGET}`."
+                );
+                "busy".to_string()
+            } else if outcome.gone {
+                eprintln!(
+                    "helm: the command terminated the exec session — no exit code. \
+                     The next `helm exec local` recreates it."
+                );
+                "gone".to_string()
+            } else {
+                if !outcome.output.is_empty() {
+                    println!("{}", outcome.output);
+                }
+                match outcome.exit {
+                    Some(code) => eprintln!("exit: {code}"),
+                    None => eprintln!(
+                        "helm: command still running after {}s (timeout). Poll with \
+                         `helm shell read {EXEC_LOCAL_TARGET}`.",
+                        runcmd::DEFAULT_RUN_TIMEOUT_SECS
+                    ),
+                }
+                activity::preview(&outcome.output)
+            };
+            log_action(
+                activity::ActivityKind::Exec,
+                &alias,
+                &session,
+                cmd,
+                &logged,
+                outcome.exit.or(if outcome.busy || outcome.gone {
+                    Some(1)
+                } else {
+                    None
+                }),
+            );
+            std::process::ExitCode::from(opts::run_exit_byte(
+                outcome.busy,
+                outcome.gone,
+                outcome.exit,
+            ))
+        }
+        Err(e) => {
+            log_action(
+                activity::ActivityKind::Exec,
+                &alias,
+                &session,
+                cmd,
+                "",
+                Some(1),
+            );
+            eprintln!("helm: {e}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+/// Script for the exec-local reachability probe: `tmux info` connects to the
+/// server and fails when there is none (or the socket is unreachable) without
+/// ever starting one. Pure builder so the shape is unit-tested.
+fn exec_local_probe_script() -> String {
+    format!("{} info >/dev/null 2>&1", tmux::tmux_prefix())
 }
 
 /// Spawn `cmd` on `alias`, stream its output live, and record the completed run
@@ -226,6 +334,32 @@ fn drain_run(surface: &str, mut handle: RunHandle, lines: &mut Vec<LineRecord>) 
 /// Best-effort: append one completed run to the history DB under `source`. A
 /// history failure must never change the command's exit code, so errors are
 /// reported to stderr and otherwise swallowed.
+/// True when a history-db open failure is *environmental* — helm was invoked
+/// from inside a read-only sandbox fence (EROFS on the state dir, or sqlite's
+/// "attempt to write a readonly database" from the migrate step) or a
+/// permission mask. History is best-effort, and one warning per CLI call
+/// pollutes every captured output an agent reads; these causes are silenced
+/// while every other failure (disk full, corruption, bad path) stays loud.
+/// Mirrors `activity::environmental_write_error` for the sibling log.
+fn environmental_db_error(e: &anyhow::Error) -> bool {
+    e.chain().any(|cause| {
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            return matches!(
+                io.kind(),
+                std::io::ErrorKind::ReadOnlyFilesystem | std::io::ErrorKind::PermissionDenied
+            );
+        }
+        if let Some(rusqlite::Error::SqliteFailure(f, _)) = cause.downcast_ref::<rusqlite::Error>()
+        {
+            return matches!(
+                f.code,
+                rusqlite::ErrorCode::ReadOnly | rusqlite::ErrorCode::PermissionDenied
+            );
+        }
+        false
+    })
+}
+
 fn persist_run(
     source: RunSource,
     alias: &str,
@@ -237,6 +371,7 @@ fn persist_run(
 ) {
     let mut store = match HistoryStore::open_default() {
         Ok(s) => s,
+        Err(e) if environmental_db_error(&e) => return,
         Err(e) => {
             eprintln!("helm: warning — could not open history db: {e}");
             return;
@@ -420,5 +555,42 @@ mod tests {
         assert_eq!(clamp_exit(255), 255);
         assert_eq!(clamp_exit(-1), 130);
         assert_eq!(clamp_exit(256), 130);
+    }
+
+    #[test]
+    fn exec_local_target_names_dedicated_session() {
+        // exec local must land in its own session, not the operator's `helm`.
+        let (alias, session) = tmux::parse_target(EXEC_LOCAL_TARGET);
+        assert_eq!(alias, tmux::LOCAL_ALIAS);
+        assert_eq!(session, "helm-exec");
+    }
+
+    #[test]
+    fn exec_local_probe_connects_without_starting_a_server() {
+        // `tmux info` fails when no server is reachable; anything that can
+        // CREATE a server (new-session, start-server) would be born inside a
+        // sandboxed caller's fence — the exact bug the probe guards against.
+        let script = exec_local_probe_script();
+        assert!(script.contains(" info"), "{script}");
+        assert!(!script.contains("new-session"), "{script}");
+        assert!(!script.contains("start-server"), "{script}");
+    }
+
+    #[test]
+    fn environmental_db_error_matches_fence_causes_only() {
+        let erofs = anyhow::Error::from(std::io::Error::from_raw_os_error(30)) // EROFS
+            .context("create history dir /x");
+        assert!(environmental_db_error(&erofs));
+        let eacces = anyhow::Error::from(std::io::Error::from_raw_os_error(13)); // EACCES
+        assert!(environmental_db_error(&eacces));
+        let readonly_db = anyhow::Error::from(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_READONLY),
+            Some("attempt to write a readonly database".into()),
+        ));
+        assert!(environmental_db_error(&readonly_db));
+        // Anything else stays loud.
+        let enospc = anyhow::Error::from(std::io::Error::from_raw_os_error(28)); // ENOSPC
+        assert!(!environmental_db_error(&enospc));
+        assert!(!environmental_db_error(&anyhow::anyhow!("corrupt db")));
     }
 }

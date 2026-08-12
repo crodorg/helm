@@ -147,6 +147,20 @@ pub fn log_path() -> Option<PathBuf> {
     state_dir().map(|d| d.join("activity.jsonl"))
 }
 
+/// True for open failures that are *environmental* — the log lives on a
+/// filesystem the caller can't write (helm invoked from inside a read-only
+/// sandbox fence: EROFS, or a permission mask: EACCES). The log is documented
+/// best-effort, and helm is one process per CLI call, so warning "once per
+/// process" would still print once per call and pollute every captured
+/// output an agent reads. These two kinds are silenced; every other error
+/// (disk full, bad path, I/O) stays loud.
+fn environmental_write_error(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::ReadOnlyFilesystem | std::io::ErrorKind::PermissionDenied
+    )
+}
+
 /// Append a record. Best-effort: a failure here never blocks the caller.
 pub fn append(record: &ActivityRecord) {
     let Some(path) = log_path() else { return };
@@ -159,6 +173,7 @@ pub fn append(record: &ActivityRecord) {
     };
     let mut file = match OpenOptions::new().create(true).append(true).open(&path) {
         Ok(f) => f,
+        Err(e) if environmental_write_error(&e) => return,
         Err(e) => {
             eprintln!("helm: activity open {}: {}", path.display(), e);
             return;
@@ -281,6 +296,22 @@ pub fn ppid() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn environmental_write_error_silences_erofs_and_eacces_only() {
+        assert!(environmental_write_error(
+            &std::io::Error::from_raw_os_error(30)
+        )); // EROFS
+        assert!(environmental_write_error(
+            &std::io::Error::from_raw_os_error(13)
+        )); // EACCES
+        assert!(!environmental_write_error(
+            &std::io::Error::from_raw_os_error(28)
+        )); // ENOSPC
+        assert!(!environmental_write_error(
+            &std::io::Error::from_raw_os_error(2)
+        )); // ENOENT
+    }
 
     #[test]
     fn privilege_escalation_at_start() {
