@@ -347,9 +347,6 @@ fn drain_run(surface: &str, mut handle: RunHandle, lines: &mut Vec<LineRecord>) 
     exit
 }
 
-/// Best-effort: append one completed run to the history DB under `source`. A
-/// history failure must never change the command's exit code, so errors are
-/// reported to stderr and otherwise swallowed.
 /// True when a history-db open failure is *environmental* — helm was invoked
 /// from inside a read-only sandbox fence (EROFS on the state dir, or sqlite's
 /// "attempt to write a readonly database" from the migrate step) or a
@@ -376,6 +373,9 @@ fn environmental_db_error(e: &anyhow::Error) -> bool {
     })
 }
 
+/// Best-effort: append one completed run to the history DB under `source`. A
+/// history failure must never change the command's exit code, so errors are
+/// reported to stderr and otherwise swallowed.
 fn persist_run(
     source: RunSource,
     alias: &str,
